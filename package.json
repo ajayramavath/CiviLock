@@ -1,0 +1,33 @@
+{
+  "name": "scheduler",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node-telegram-bot-api": "^0.64.13"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "seed": "bun src/scripts/seed.ts",
+    "complete": "bun src/scripts/complete-tasks.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "@bull-board/api": "^6.20.3",
+    "@bull-board/express": "^6.20.3",
+    "@sentry/node": "^10.42.0",
+    "@types/express": "^5.0.6",
+    "bullmq": "^5.67.3",
+    "dotenv": "^17.2.4",
+    "express": "^5.2.1",
+    "ioredis": "^5.9.2",
+    "mongodb": "^7.1.0",
+    "node-telegram-bot-api": "^0.67.0",
+    "posthog-node": "^5.28.0",
+    "xstate": "^5.28.0"
+  }
+}
