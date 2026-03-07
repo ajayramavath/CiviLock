@@ -336,23 +336,51 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
   }
 
   const plan: StudyPlan = user.studyPlan;
+  const wakeHour = user.sleepSchedule?.wakeHour ?? 6;
+  const wakeMinute = user.sleepSchedule?.wakeMinute ?? 0;
+  const sleepHour = user.sleepSchedule?.sleepHour ?? 23;
+  const sleepsAfterMidnight = sleepHour < wakeHour;
 
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  tomorrow.setHours(0, 0, 0, 0);
-  const dayOfWeek = tomorrow.getDay();
+  // ── Compute the NEXT wake cycle ──────────────────────────────────────
+  // "Next day" = next wake time → next sleep time
+  // If it's 1:30 AM and user sleeps at 2 AM, the next wake is TODAY at 6 AM
+  // If it's 11 PM and user sleeps at 11:30 PM, the next wake is TOMORROW at 6 AM
+  const now = new Date();
+  const currentHour = now.getHours();
 
-  // Check for existing blocks
-  const tomorrowEnd = new Date(tomorrow);
-  tomorrowEnd.setHours(23, 59, 59, 999);
+  const nextWake = new Date(now);
+  nextWake.setHours(wakeHour, wakeMinute, 0, 0);
 
+  // Determine if next wake is today or tomorrow
+  const isInLateNight = sleepsAfterMidnight && currentHour < sleepHour;
+  if (currentHour >= wakeHour && !isInLateNight) {
+    // Past wake time and not in late-night window → next wake is tomorrow
+    nextWake.setDate(nextWake.getDate() + 1);
+  }
+  // If in late-night window (e.g. 1:30 AM, sleep at 2 AM), next wake is today — already correct
+
+  const cycleEnd = new Date(nextWake);
+  if (sleepsAfterMidnight) {
+    cycleEnd.setDate(cycleEnd.getDate() + 1);
+  }
+  cycleEnd.setHours(sleepHour, 0, 0, 0);
+
+  const dayOfWeek = nextWake.getDay();
+
+  console.log(
+    `[BLOCKS] Next cycle: wake=${nextWake.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} → ` +
+    `sleep=${cycleEnd.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} | dayOfWeek=${dayOfWeek}`,
+  );
+
+  // ── Check for existing blocks in the next cycle ──────────────────────
   const existing = await db.collection("actionStations").countDocuments({
     userId: uid,
-    scheduledStart: { $gte: tomorrow, $lte: tomorrowEnd },
+    scheduledStart: { $gte: nextWake, $lte: cycleEnd },
     status: { $in: ["pending", "completed", "partial"] },
   });
 
   if (existing > 0) {
+    console.log(`[BLOCKS] ${existing} blocks already exist for this cycle`);
     return { created: 0, blocks: [] };
   }
 
@@ -369,10 +397,12 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
   for (let i = 0; i < dayBlocks.length; i++) {
     const block = dayBlocks[i] as StudyBlock;
 
-    const start = new Date(tomorrow);
+    // Anchor block to the wake day
+    const start = new Date(nextWake);
     start.setHours(block.startHour, block.startMinute, 0, 0);
 
-    if (block.startHour < (user.sleepSchedule?.wakeHour || 6)) {
+    // If block's start hour is before wake hour, it's a late-night block (after midnight)
+    if (block.startHour < wakeHour) {
       start.setDate(start.getDate() + 1);
     }
 
