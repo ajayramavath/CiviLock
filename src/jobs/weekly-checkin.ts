@@ -28,10 +28,11 @@ export function startWeeklyCheckInWorker() {
       if (!user || !user.onboardingComplete) return;
 
       console.log(`📊 Running weekly check-in for ${user.name}`);
+      const onboardedAt = user.createdAt ? new Date(user.createdAt) : undefined;
 
       try {
-        const stats = await getWeeklySubjectStats(user._id);
-        const avoidance = await getAvoidanceAlerts(user._id);
+        const stats = await getWeeklySubjectStats(user._id, onboardedAt);
+        const avoidance = await getAvoidanceAlerts(user._id, onboardedAt);
 
         // Build weekly context for AI
         let weeklyContext = `WEEKLY CHECK-IN CONTEXT:\n`;

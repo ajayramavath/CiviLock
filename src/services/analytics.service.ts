@@ -30,17 +30,20 @@ export interface WeeklyStats {
 
 export async function getWeeklySubjectStats(
   userId: ObjectId | string,
+  onboardedAt?: Date,
 ): Promise<WeeklyStats> {
   const db = getDb();
   const uid = typeof userId === "string" ? new ObjectId(userId) : userId;
 
-  // Last 7 days
-  const weekAgo = new Date();
+  // Last 7 days, but never before onboarding
+  let weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
+  if (onboardedAt && onboardedAt > weekAgo) weekAgo = new Date(onboardedAt);
 
-  // Previous week (7-14 days ago)
-  const twoWeeksAgo = new Date();
+  // Previous week (7-14 days ago), clamped to onboarding
+  let twoWeeksAgo = new Date();
   twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+  if (onboardedAt && onboardedAt > twoWeeksAgo) twoWeeksAgo = new Date(onboardedAt);
 
   const [currentWeekTasks, previousWeekTasks] = await Promise.all([
     db
@@ -133,7 +136,7 @@ export async function getWeeklySubjectStats(
   }));
 
   // Streak calculation
-  const currentStreak = await calculateStreak(uid);
+  const currentStreak = await calculateStreak(uid, onboardedAt);
 
   return {
     totalBlocks,
@@ -161,12 +164,14 @@ export interface AvoidanceAlert {
 
 export async function getAvoidanceAlerts(
   userId: ObjectId | string,
+  onboardedAt?: Date,
 ): Promise<AvoidanceAlert[]> {
   const db = getDb();
   const uid = typeof userId === "string" ? new ObjectId(userId) : userId;
 
-  const weekAgo = new Date();
+  let weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
+  if (onboardedAt && onboardedAt > weekAgo) weekAgo = new Date(onboardedAt);
 
   const tasks = await db
     .collection("actionStations")
@@ -219,13 +224,18 @@ export async function getAvoidanceAlerts(
 // ─── Streak Calculation ──────────────────────────────────────────────────────
 // Consecutive days with at least 1 completed task
 
-async function calculateStreak(userId: ObjectId): Promise<number> {
+async function calculateStreak(userId: ObjectId, onboardedAt?: Date): Promise<number> {
   const db = getDb();
   let streak = 0;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  for (let i = 0; i < 90; i++) {
+  // Don't look back past onboarding date
+  const maxDays = onboardedAt
+    ? Math.min(90, Math.ceil((today.getTime() - onboardedAt.getTime()) / (1000 * 60 * 60 * 24)) + 1)
+    : 90;
+
+  for (let i = 0; i < maxDays; i++) {
     // Check up to 90 days back
     const dayStart = new Date(today);
     dayStart.setDate(dayStart.getDate() - i);
@@ -283,6 +293,9 @@ export async function buildCheckInContext(
     })
     .toArray();
 
+  // If user onboarded today, there may be no meaningful data yet
+  const onboardedAt = user.createdAt ? new Date(user.createdAt) : undefined;
+
   const completed = todayTasks.filter((t) => t.status === "completed");
   const skipped = todayTasks.filter((t) => t.status === "skipped");
   const partial = todayTasks.filter((t) => t.status === "partial");
@@ -304,27 +317,32 @@ export async function buildCheckInContext(
     .map((t) => t.subject);
 
   // Weekly stats for context
-  const weekStats = await getWeeklySubjectStats(uid);
-  const avoidance = await getAvoidanceAlerts(uid);
+  const weekStats = await getWeeklySubjectStats(uid, onboardedAt);
+  const avoidance = await getAvoidanceAlerts(uid, onboardedAt);
 
   // UPSC context
   const upsc = user.upscProfile;
   const days = upsc ? daysUntilPrelims(upsc.targetYear) : null;
 
-  // Yesterday's comparison
+  // Yesterday's comparison (skip if user wasn't onboarded yet)
+  let yesterdayCompleted = 0;
+  let yesterdayTotal = 0;
   const yesterdayStart = new Date(todayStart);
   yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-  const yesterdayTasks = await db
-    .collection("actionStations")
-    .find({
-      userId: uid,
-      scheduledStart: { $gte: yesterdayStart, $lt: todayStart },
-    })
-    .toArray();
-  const yesterdayCompleted = yesterdayTasks.filter(
-    (t) => t.status === "completed",
-  ).length;
-  const yesterdayTotal = yesterdayTasks.length;
+
+  if (!onboardedAt || yesterdayStart >= onboardedAt) {
+    const yesterdayTasks = await db
+      .collection("actionStations")
+      .find({
+        userId: uid,
+        scheduledStart: { $gte: yesterdayStart, $lt: todayStart },
+      })
+      .toArray();
+    yesterdayCompleted = yesterdayTasks.filter(
+      (t) => t.status === "completed",
+    ).length;
+    yesterdayTotal = yesterdayTasks.length;
+  }
 
   // Build context
   let context = `DAILY CHECK-IN CONTEXT:\n`;

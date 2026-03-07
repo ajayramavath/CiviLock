@@ -239,8 +239,9 @@ export function registerCommandHandlers(bot: TelegramBot) {
     const days = user.upscProfile
       ? daysUntilPrelims(user.upscProfile.targetYear)
       : null;
-    const stats = await getWeeklySubjectStats(user._id);
-    const avoidance = await getAvoidanceAlerts(user._id);
+    const onboardedAt = user.createdAt ? new Date(user.createdAt) : undefined;
+    const stats = await getWeeklySubjectStats(user._id, onboardedAt);
+    const avoidance = await getAvoidanceAlerts(user._id, onboardedAt);
 
     if (stats.totalBlocks === 0) {
       await bot.sendMessage(
