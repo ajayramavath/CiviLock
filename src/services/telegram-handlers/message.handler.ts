@@ -10,6 +10,7 @@ import {
   formatTime,
   formatDateTime,
 } from "../conversation.service";
+import { istDate, addDays } from "../../utils/timezone.js";
 import {
   appendToHistory,
   clearHistory,
@@ -313,11 +314,11 @@ async function handleTaskUpdated(
         ? getUserCurrentDayCycle(user)
         : getUserNextDayCycle(user);
 
-    const newStart = new Date(targetCycle.startDateTime);
-    newStart.setHours(slot.hour, slot.minute, 0, 0);
+    let newStart = istDate(targetCycle.startDateTime, slot.hour, slot.minute);
 
     if (slot.hour < user.sleepSchedule.wakeHour) {
-      newStart.setDate(newStart.getDate() + 1);
+      const nextDay = addDays(targetCycle.startDateTime, 1);
+      newStart = istDate(nextDay, slot.hour, slot.minute);
     }
 
     const duration = updateInfo.newDuration || taskToUpdate.estimatedMinutes;

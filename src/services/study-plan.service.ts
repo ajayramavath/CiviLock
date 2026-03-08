@@ -7,6 +7,7 @@ import type { StudyBlock, StudyPlan } from "../models/types.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { llmCall } from "./llm.service.js";
 import { trackAPIUsage } from "./rate-limiter.service.js";
+import { istDate, nowInIST, addDays } from "../utils/timezone.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -341,31 +342,32 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
   const sleepHour = user.sleepSchedule?.sleepHour ?? 23;
   const sleepsAfterMidnight = sleepHour < wakeHour;
 
-  // ── Compute the NEXT wake cycle ──────────────────────────────────────
-  // "Next day" = next wake time → next sleep time
-  // If it's 1:30 AM and user sleeps at 2 AM, the next wake is TODAY at 6 AM
-  // If it's 11 PM and user sleeps at 11:30 PM, the next wake is TOMORROW at 6 AM
-  const now = new Date();
-  const currentHour = now.getHours();
+  // ── Compute the NEXT wake cycle (IST-aware) ──────────────────────────
+  const ist = nowInIST();
+  const currentHour = ist.hour;
 
-  const nextWake = new Date(now);
-  nextWake.setHours(wakeHour, wakeMinute, 0, 0);
+  // Start with today's wake time in IST
+  let nextWake = istDate(ist.date, wakeHour, wakeMinute);
 
   // Determine if next wake is today or tomorrow
   const isInLateNight = sleepsAfterMidnight && currentHour < sleepHour;
   if (currentHour >= wakeHour && !isInLateNight) {
     // Past wake time and not in late-night window → next wake is tomorrow
-    nextWake.setDate(nextWake.getDate() + 1);
+    const tomorrow = new Date(ist.date);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    nextWake = istDate(tomorrow, wakeHour, wakeMinute);
   }
-  // If in late-night window (e.g. 1:30 AM, sleep at 2 AM), next wake is today — already correct
 
-  const cycleEnd = new Date(nextWake);
+  // Cycle end = sleep time (may be next calendar day for late sleepers)
+  let cycleEndBase = nextWake;
   if (sleepsAfterMidnight) {
-    cycleEnd.setDate(cycleEnd.getDate() + 1);
+    cycleEndBase = new Date(nextWake.getTime() + 24 * 60 * 60 * 1000);
   }
-  cycleEnd.setHours(sleepHour, 0, 0, 0);
+  const cycleEnd = istDate(cycleEndBase, sleepHour, 0);
 
-  const dayOfWeek = nextWake.getDay();
+  const dayOfWeek = new Date(
+    nextWake.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
+  ).getDay();
 
   console.log(
     `[BLOCKS] Next cycle: wake=${nextWake.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} → ` +
@@ -397,13 +399,13 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
   for (let i = 0; i < dayBlocks.length; i++) {
     const block = dayBlocks[i] as StudyBlock;
 
-    // Anchor block to the wake day
-    const start = new Date(nextWake);
-    start.setHours(block.startHour, block.startMinute, 0, 0);
+    // Build start time in IST, anchored to the wake day
+    let start = istDate(nextWake, block.startHour, block.startMinute);
 
     // If block's start hour is before wake hour, it's a late-night block (after midnight)
     if (block.startHour < wakeHour) {
-      start.setDate(start.getDate() + 1);
+      const nextDay = new Date(nextWake.getTime() + 24 * 60 * 60 * 1000);
+      start = istDate(nextDay, block.startHour, block.startMinute);
     }
 
     const end = new Date(start.getTime() + block.durationMinutes * 60 * 1000);

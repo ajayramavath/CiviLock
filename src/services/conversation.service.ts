@@ -3,6 +3,7 @@ import { getDb } from "../db.js";
 import type { ChatMessage } from "./conversation-state.service.js";
 import { UPSC_SUBJECTS } from "../models/types.js";
 import { llmCall } from "./llm.service.js";
+import { istDate, addDays, nowInIST } from "../utils/timezone.js";
 
 export interface ConversationResponse {
   type:
@@ -239,11 +240,12 @@ export async function saveConfirmedTask(
       ? getUserCurrentDayCycle(user)
       : getUserNextDayCycle(user);
 
-  const startDate = new Date(dayCycle.startDateTime);
-  startDate.setHours(slot.hour, slot.minute, 0, 0);
+  let startDate = istDate(dayCycle.startDateTime, slot.hour, slot.minute);
 
+  // If block's start hour is before wake, it's a late-night block (next calendar day)
   if (slot.hour < user.sleepSchedule.wakeHour) {
-    startDate.setDate(startDate.getDate() + 1);
+    const nextDay = addDays(dayCycle.startDateTime, 1);
+    startDate = istDate(nextDay, slot.hour, slot.minute);
   }
 
   const endDate = new Date(
@@ -349,22 +351,19 @@ EMOJI: study/revise→📚, answer writing→✍️, current affairs→📰, CSA
 
 export function getUserCurrentDayCycle(user: any) {
   const { wakeHour, wakeMinute, sleepHour, sleepMinute } = user.sleepSchedule;
-  const now = new Date();
-  const currentHour = now.getHours();
+  const { hour: currentHour, date: now } = nowInIST();
   const sleepsAfterMidnight = sleepHour < wakeHour;
   const isInLateNight = sleepsAfterMidnight && currentHour < sleepHour;
 
-  let cycleStart = new Date();
-  if (currentHour >= wakeHour || isInLateNight) {
-    if (isInLateNight) cycleStart.setDate(cycleStart.getDate() - 1);
-    cycleStart.setHours(wakeHour, wakeMinute, 0, 0);
-  } else {
-    cycleStart.setHours(wakeHour, wakeMinute, 0, 0);
+  let baseDate = now;
+  if (isInLateNight) {
+    // It's e.g. 1 AM — the cycle started yesterday
+    baseDate = addDays(now, -1);
   }
 
-  const cycleEnd = new Date(cycleStart);
-  if (sleepHour < wakeHour) cycleEnd.setDate(cycleEnd.getDate() + 1);
-  cycleEnd.setHours(sleepHour, sleepMinute, 0, 0);
+  const cycleStart = istDate(baseDate, wakeHour, wakeMinute);
+  const cycleEndBase = sleepsAfterMidnight ? addDays(baseDate, 1) : baseDate;
+  const cycleEnd = istDate(cycleEndBase, sleepHour, sleepMinute);
 
   return { startDateTime: cycleStart, endDateTime: cycleEnd };
 }
@@ -372,15 +371,14 @@ export function getUserCurrentDayCycle(user: any) {
 export function getUserNextDayCycle(user: any) {
   const current = getUserCurrentDayCycle(user);
   const { wakeHour, wakeMinute, sleepHour, sleepMinute } = user.sleepSchedule;
+  const sleepsAfterMidnight = sleepHour < wakeHour;
 
-  const nextStart = new Date(current.startDateTime);
-  nextStart.setDate(nextStart.getDate() + 1);
+  const nextStart = addDays(current.startDateTime, 1);
+  const nextStartDate = istDate(nextStart, wakeHour, wakeMinute);
+  const nextEndBase = sleepsAfterMidnight ? addDays(nextStart, 1) : nextStart;
+  const nextEnd = istDate(nextEndBase, sleepHour, sleepMinute);
 
-  const nextEnd = new Date(nextStart);
-  if (sleepHour < wakeHour) nextEnd.setDate(nextEnd.getDate() + 1);
-  nextEnd.setHours(sleepHour, sleepMinute, 0, 0);
-
-  return { startDateTime: nextStart, endDateTime: nextEnd };
+  return { startDateTime: nextStartDate, endDateTime: nextEnd };
 }
 
 export function formatHourMin(hour: number, minute: number): string {
