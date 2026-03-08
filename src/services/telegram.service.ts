@@ -10,6 +10,10 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, {
   polling: true,
 });
 
+const adminBot = new TelegramBot(process.env.TELEGRAM_ADMIN_BOT_TOKEN!, {
+  polling: true,
+});
+
 registerOnboardingHandlers(bot);
 registerCommandHandlers(bot);
 registerMessageHandler(bot);
@@ -74,4 +78,4 @@ export async function sendTelegramMessage(
   }
 }
 
-export { bot };
+export { bot, adminBot };

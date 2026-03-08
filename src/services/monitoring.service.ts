@@ -1,7 +1,7 @@
 // src/services/monitoring.service.ts
 import * as Sentry from "@sentry/node";
 import type { Express, Request, Response, NextFunction } from "express";
-import { bot } from "./telegram.service.js";
+import { adminBot } from "./telegram.service.js";
 
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 
@@ -195,7 +195,7 @@ export async function alertAdmin(
   text += `\n<i>${time} IST</i>`;
 
   try {
-    await bot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: "HTML" });
+    await adminBot.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: "HTML" });
   } catch (sendErr: any) {
     // Don't let alert failures cascade
     console.error(`❌ Failed to send admin alert: ${sendErr.message}`);
