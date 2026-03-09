@@ -103,12 +103,16 @@ export async function startDailyCheckInWorker() {
         }
       }
 
+      const formattedResponse = response
+        .replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")
+        .replace(/\*(.*?)\*/g, "<i>$1</i>");
+
       const message =
         `🔔 <b>Daily Check-in</b>${countdown}\n\n` +
         `📊 <b>${completed}/${totalTasks}</b> blocks · ${completedHours}h completed / ${totalHours}h scheduled` +
         `${skippedHours > 0 ? ` · ${skippedHours}h skipped` : ""}` +
         `${subjectBreakdown}\n\n` +
-        `${response}`;
+        `${formattedResponse}`;
 
       await sendTelegramMessage(user._id, message, "HTML");
 

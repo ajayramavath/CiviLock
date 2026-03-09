@@ -62,82 +62,82 @@ export function registerCommandHandlers(bot: TelegramBot) {
 
   // ── /plan — UPSC bulk study scheduling ─────────────────────────────────
 
-  bot.onText(/\/plan/, async (msg) => {
-    const chatId = msg.chat.id;
-    trackEvent(chatId.toString(), "command_used", { command: "/plan" });
-    const db = getDb();
-    const user = await db
-      .collection("users")
-      .findOne({ telegramChatId: chatId.toString() });
-    const state = await getState(chatId.toString());
+  // bot.onText(/\/plan/, async (msg) => {
+  //   const chatId = msg.chat.id;
+  //   trackEvent(chatId.toString(), "command_used", { command: "/plan" });
+  //   const db = getDb();
+  //   const user = await db
+  //     .collection("users")
+  //     .findOne({ telegramChatId: chatId.toString() });
+  //   const state = await getState(chatId.toString());
 
-    if (!user || !user.onboardingComplete) {
-      await bot.sendMessage(
-        chatId,
-        "⚠️ Please complete setup first. Use /start",
-      );
-      return;
-    }
+  //   if (!user || !user.onboardingComplete) {
+  //     await bot.sendMessage(
+  //       chatId,
+  //       "⚠️ Please complete setup first. Use /start",
+  //     );
+  //     return;
+  //   }
 
-    const dayCycle = getUserNextDayCycle(user);
-    const days = user.upscProfile
-      ? daysUntilPrelims(user.upscProfile.targetYear)
-      : null;
-    const countdown = days ? `\n⏰ <b>${days} days until Prelims</b>\n` : "";
+  //   const dayCycle = getUserNextDayCycle(user);
+  //   const days = user.upscProfile
+  //     ? daysUntilPrelims(user.upscProfile.targetYear)
+  //     : null;
+  //   const countdown = days ? `\n⏰ <b>${days} days until Prelims</b>\n` : "";
 
-    // Check if there are already tasks for tomorrow
-    const existingTasks = await db
-      .collection("actionStations")
-      .find({
-        userId: user._id,
-        scheduledStart: {
-          $gte: dayCycle.startDateTime,
-          $lte: dayCycle.endDateTime,
-        },
-      })
-      .sort({ scheduledStart: 1 })
-      .toArray();
+  //   // Check if there are already tasks for tomorrow
+  //   const existingTasks = await db
+  //     .collection("actionStations")
+  //     .find({
+  //       userId: user._id,
+  //       scheduledStart: {
+  //         $gte: dayCycle.startDateTime,
+  //         $lte: dayCycle.endDateTime,
+  //       },
+  //     })
+  //     .sort({ scheduledStart: 1 })
+  //     .toArray();
 
-    let existingInfo = "";
-    if (existingTasks.length > 0) {
-      existingInfo =
-        `\n📋 <b>Already scheduled:</b>\n` +
-        existingTasks
-          .map(
-            (t) =>
-              `  ${formatTime(t.scheduledStart)} - ${t.title}${t.subject ? ` [${t.subject}]` : ""}`,
-          )
-          .join("\n") +
-        "\n\nNew blocks will be added alongside these.\n";
-    }
+  //   let existingInfo = "";
+  //   if (existingTasks.length > 0) {
+  //     existingInfo =
+  //       `\n📋 <b>Already scheduled:</b>\n` +
+  //       existingTasks
+  //         .map(
+  //           (t) =>
+  //             `  ${formatTime(t.scheduledStart)} - ${t.title}${t.subject ? ` [${t.subject}]` : ""}`,
+  //         )
+  //         .join("\n") +
+  //       "\n\nNew blocks will be added alongside these.\n";
+  //   }
 
-    // Get avoidance data to suggest what to study
-    const avoidance = await getAvoidanceAlerts(user._id);
-    let suggestion = "";
-    if (avoidance.length > 0) {
-      const avoided = avoidance.map((a) => a.subject).join(", ");
-      suggestion = `\n⚠️ <b>You've been avoiding:</b> ${avoided}\nConsider including these tomorrow.\n`;
-    }
+  //   // Get avoidance data to suggest what to study
+  //   const avoidance = await getAvoidanceAlerts(user._id);
+  //   let suggestion = "";
+  //   if (avoidance.length > 0) {
+  //     const avoided = avoidance.map((a) => a.subject).join(", ");
+  //     suggestion = `\n⚠️ <b>You've been avoiding:</b> ${avoided}\nConsider including these tomorrow.\n`;
+  //   }
 
-    await setState(chatId.toString(), {
-      step: "idle",
-      data: { planningMode: true, dayCycle },
-      history: state?.history || [],
-    });
+  //   await setState(chatId.toString(), {
+  //     step: "idle",
+  //     data: { planningMode: true, dayCycle },
+  //     history: state?.history || [],
+  //   });
 
-    await bot.sendMessage(
-      chatId,
-      `📋 <b>Plan Tomorrow's Study</b>\n${countdown}` +
-      `\n🌅 ${formatDateTime(dayCycle.startDateTime)} → 😴 ${formatDateTime(dayCycle.endDateTime)}\n` +
-      existingInfo +
-      suggestion +
-      `\nDump your full plan:\n` +
-      `<i>"9-12 polity, 2-5 optional, 7-8 CA, 9-10 answer writing"</i>\n\n` +
-      `Or one at a time:\n` +
-      `<i>"study polity 9am to 12pm"</i>`,
-      { parse_mode: "HTML" },
-    );
-  });
+  //   await bot.sendMessage(
+  //     chatId,
+  //     `📋 <b>Plan Tomorrow's Study</b>\n${countdown}` +
+  //     `\n🌅 ${formatDateTime(dayCycle.startDateTime)} → 😴 ${formatDateTime(dayCycle.endDateTime)}\n` +
+  //     existingInfo +
+  //     suggestion +
+  //     `\nDump your full plan:\n` +
+  //     `<i>"9-12 polity, 2-5 optional, 7-8 CA, 9-10 answer writing"</i>\n\n` +
+  //     `Or one at a time:\n` +
+  //     `<i>"study polity 9am to 12pm"</i>`,
+  //     { parse_mode: "HTML" },
+  //   );
+  // });
 
   // ── /today — show today's study blocks with subject tags ───────────────
 
@@ -472,10 +472,20 @@ export async function handleStrictnessChangeCallback(
     );
 
   const name = level === 2 ? "Strict Mentor 🔥" : "Study Partner 📖";
+
+  try {
+    await bot.editMessageText(`✅ Changed to: <b>${name}</b>`, {
+      chat_id: chatId,
+      message_id: query.message!.message_id,
+      reply_markup: { inline_keyboard: [] },
+      parse_mode: "HTML",
+    });
+  } catch { }
+
   await bot.answerCallbackQuery(query.id, { text: `Switched to ${name}` });
   await bot.sendMessage(
     chatId,
-    `✅ Accountability level: <b>${name}</b>\n\n${level === 2 ? "No more easy exits. I'll follow up." : "I'll track and remind, but won't chase."}`,
+    `Accountability level: <b>${name}</b>\n\n${level === 2 ? "No more easy exits. I'll follow up." : "I'll track and remind, but won't chase."}`,
     { parse_mode: "HTML" },
   );
 

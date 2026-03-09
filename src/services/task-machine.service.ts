@@ -157,58 +157,73 @@ async function scheduleTimedEvents(
     await taskReminderQueue.add(
       "state-event",
       { taskId, event: { type: "PRE_TASK_WINDOW" } },
-      {
-        delay: preTaskTime - now,
-        jobId: `pre-task-${taskId}`,
-      },
+      { delay: preTaskTime - now, jobId: `pre-task-${taskId}` },
     );
-    console.log(
-      `  📅 PRE_TASK_WINDOW at ${new Date(preTaskTime).toLocaleString()}`,
+    console.log(`  📅 PRE_TASK_WINDOW at ${new Date(preTaskTime).toLocaleString()}`);
+  } else if (scheduledStart.getTime() > now) {
+    // We are already inside the 5-min pre-task window! Fire it immediately.
+    await taskReminderQueue.add(
+      "state-event",
+      { taskId, event: { type: "PRE_TASK_WINDOW" } },
+      { delay: 0, jobId: `pre-task-${taskId}` },
     );
+    console.log(`  📅 PRE_TASK_WINDOW fired immediately (already in window)`);
   }
 
   // Start time reached
+  const overdueTime = scheduledStart.getTime() + 30 * 60 * 1000;
   if (scheduledStart.getTime() > now) {
     await taskReminderQueue.add(
       "state-event",
       { taskId, event: { type: "START_TIME_REACHED" } },
-      {
-        delay: scheduledStart.getTime() - now,
-        jobId: `start-${taskId}`,
-      },
+      { delay: scheduledStart.getTime() - now, jobId: `start-${taskId}` },
     );
-    console.log(
-      `  📅 START_TIME_REACHED at ${scheduledStart.toLocaleString()}`,
+    console.log(`  📅 START_TIME_REACHED at ${scheduledStart.toLocaleString()}`);
+  } else if (overdueTime > now) {
+    // We are already running the task! Fire start event immediately.
+    await taskReminderQueue.add(
+      "state-event",
+      { taskId, event: { type: "START_TIME_REACHED" } },
+      { delay: 0, jobId: `start-${taskId}` },
     );
+    console.log(`  📅 START_TIME_REACHED fired immediately (already running)`);
   }
 
   // Overdue threshold: 30 minutes after start
-  const overdueTime = scheduledStart.getTime() + 30 * 60 * 1000;
+  const scheduledEndMs = scheduledEnd.getTime();
   if (overdueTime > now) {
     await taskReminderQueue.add(
       "state-event",
       { taskId, event: { type: "OVERDUE_THRESHOLD" } },
-      {
-        delay: overdueTime - now,
-        jobId: `overdue-${taskId}`,
-      },
+      { delay: overdueTime - now, jobId: `overdue-${taskId}` },
     );
-    console.log(
-      `  📅 OVERDUE_THRESHOLD at ${new Date(overdueTime).toLocaleString()}`,
+    console.log(`  📅 OVERDUE_THRESHOLD at ${new Date(overdueTime).toLocaleString()}`);
+  } else if (scheduledEndMs > now) {
+    // We are already overdue! Fire overdue event immediately.
+    await taskReminderQueue.add(
+      "state-event",
+      { taskId, event: { type: "OVERDUE_THRESHOLD" } },
+      { delay: 0, jobId: `overdue-${taskId}` },
     );
+    console.log(`  📅 OVERDUE_THRESHOLD fired immediately (already overdue)`);
   }
 
   // End time reached
-  if (scheduledEnd.getTime() > now) {
+  if (scheduledEndMs > now) {
     await taskReminderQueue.add(
       "state-event",
       { taskId, event: { type: "END_TIME_REACHED" } },
-      {
-        delay: scheduledEnd.getTime() - now,
-        jobId: `end-${taskId}`,
-      },
+      { delay: scheduledEndMs - now, jobId: `end-${taskId}` },
     );
     console.log(`  📅 END_TIME_REACHED at ${scheduledEnd.toLocaleString()}`);
+  } else {
+    // Task is completely in the past. Fire end time.
+    await taskReminderQueue.add(
+      "state-event",
+      { taskId, event: { type: "END_TIME_REACHED" } },
+      { delay: 0, jobId: `end-${taskId}` },
+    );
+    console.log(`  📅 END_TIME_REACHED fired immediately (task already ended)`);
   }
 }
 

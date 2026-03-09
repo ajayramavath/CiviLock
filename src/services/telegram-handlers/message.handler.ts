@@ -64,11 +64,13 @@ export function registerMessageHandler(bot: TelegramBot) {
 
       if (!user || !user.onboardingComplete || !msg.text) return;
 
+      console.log(state?.data?.planningMode)
+
       // ========== BULK PLAN MODE ==========
-      if (state?.data?.planningMode) {
-        await handleBulkPlan(bot, chatId, msg.text, user);
-        return;
-      }
+      // if (state?.data?.planningMode) {
+      //   await handleBulkPlan(bot, chatId, msg.text, user);
+      //   return;
+      // }
 
       // ========== SMART CONVERSATION ==========
 
@@ -106,12 +108,16 @@ export function registerMessageHandler(bot: TelegramBot) {
 
         case "not_a_task":
         case "unclear":
-        default:
-          await bot.sendMessage(chatId, result.replyMessage);
+        default: {
+          const formattedReply = result.replyMessage
+            ? result.replyMessage.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/\*(.*?)\*/g, "<i>$1</i>")
+            : "";
+          await bot.sendMessage(chatId, formattedReply, { parse_mode: "HTML" });
           if (result.type === "not_a_task") {
             await clearHistory(chatId.toString());
           }
           break;
+        }
       }
     } catch (err: any) {
       captureMessageError("message_handler", chatId, err, {
@@ -224,8 +230,9 @@ async function handleTaskCaptured(
     return;
   }
 
-  const subjectTag = result.task.subject ? ` [${result.task.subject}]` : "";
-  let message = `Got it! Adding <b>${result.task.title}</b>${subjectTag} (${result.task.durationMinutes} min)\n\nBest available slots:\n\n`;
+  let message = result.replyMessage
+    ? `${result.replyMessage.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/\*(.*?)\*/g, "<i>$1</i>")}\n\n`
+    : `Got it! Adding <b>${result.task.title}</b> (${result.task.durationMinutes} min)\n\nBest available slots:\n\n`;
 
   result.suggestedSlots.forEach((slot: any, i: number) => {
     const label = slot.date === "today" ? "Today" : "Tomorrow";
@@ -250,40 +257,42 @@ async function handleTaskUpdated(
   }
 
   const updateInfo = result.taskToUpdate;
-  const dayCycle =
-    updateInfo.date === "today"
-      ? getUserCurrentDayCycle(user)
-      : getUserNextDayCycle(user);
-
   const allTasks = await db
     .collection("actionStations")
     .find({
       userId: user._id,
-      scheduledStart: {
-        $gte: dayCycle.startDateTime,
-        $lte: dayCycle.endDateTime,
-      },
       status: "pending",
     })
     .sort({ scheduledStart: 1 })
     .toArray();
 
-  const identifier = updateInfo.identifier.toLowerCase();
+  const identifier = updateInfo.identifier ? updateInfo.identifier.toLowerCase() : "";
   let taskToUpdate = null;
 
-  if (updateInfo.currentTime) {
+  // 1. Try exact ID match first (new behavior)
+  if (updateInfo.taskId) {
+    taskToUpdate = allTasks.find((t: any) => t._id.toString() === updateInfo.taskId);
+  }
+
+  // 2. Fallback to old heuristic match if the LLM didn't provide a taskId or it was invalid
+  if (!taskToUpdate && updateInfo.currentTime && identifier) {
     taskToUpdate = allTasks.find((t: any) => {
-      const titleMatch = t.title.toLowerCase().includes(identifier);
-      const hourMatch =
-        new Date(t.scheduledStart).getHours() === updateInfo.currentTime!.hour;
+      const fullTitle = `${t.title} ${t.subject || ""}`.toLowerCase();
+      const titleMatch = fullTitle.includes(identifier) || identifier.includes(t.title.toLowerCase());
+
+      const istDateStr = new Date(t.scheduledStart).toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+      const hourMatch = new Date(istDateStr).getHours() === updateInfo.currentTime!.hour;
+
       return titleMatch && hourMatch;
     });
   }
 
-  if (!taskToUpdate) {
-    const matchingTasks = allTasks.filter((t: any) =>
-      t.title.toLowerCase().includes(identifier),
-    );
+  // 3. Last resort fuzzy match
+  if (!taskToUpdate && identifier) {
+    const matchingTasks = allTasks.filter((t: any) => {
+      const fullTitle = `${t.title} ${t.subject || ""}`.toLowerCase();
+      return fullTitle.includes(identifier) || identifier.includes(t.title.toLowerCase());
+    });
 
     if (matchingTasks.length === 1) {
       taskToUpdate = matchingTasks[0];
@@ -302,7 +311,7 @@ async function handleTaskUpdated(
   if (!taskToUpdate) {
     await bot.sendMessage(
       chatId,
-      `Couldn't find "${updateInfo.identifier}". Use /today to see your blocks.`,
+      `Couldn't find that block. Use /today to see your current schedule.`,
     );
     return;
   }
@@ -359,11 +368,11 @@ async function handleTaskUpdated(
     }
 
     const subject = taskToUpdate.subject ? ` [${taskToUpdate.subject}]` : "";
-    await bot.sendMessage(
-      chatId,
-      `✅ Updated! <b>${taskToUpdate.title}</b>${subject} moved to ${formatDateTime(newStart)}`,
-      { parse_mode: "HTML" },
-    );
+    const responseMsg = result.replyMessage
+      ? result.replyMessage.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/\*(.*?)\*/g, "<i>$1</i>")
+      : `✅ Updated! <b>${taskToUpdate.title}</b>${subject} moved to ${formatDateTime(newStart)}`;
+
+    await bot.sendMessage(chatId, responseMsg, { parse_mode: "HTML" });
   } else {
     let message = `When should I reschedule <b>${taskToUpdate.title}</b>?\n\n`;
 
@@ -387,81 +396,104 @@ async function handleTaskDeleted(
   user: any,
   db: any,
 ) {
-  if (!result.taskToDelete) {
+  if (!result.taskToDelete && !result.tasksToDelete) {
     await bot.sendMessage(chatId, "Which study block did you want to cancel?");
     return;
   }
 
-  const deleteInfo = result.taskToDelete;
-  const dayCycle =
-    deleteInfo.date === "today"
-      ? getUserCurrentDayCycle(user)
-      : getUserNextDayCycle(user);
+  const deleteList = result.tasksToDelete || [result.taskToDelete];
 
   const allTasks = await db
     .collection("actionStations")
     .find({
       userId: user._id,
-      scheduledStart: {
-        $gte: dayCycle.startDateTime,
-        $lte: dayCycle.endDateTime,
-      },
       status: "pending",
     })
     .sort({ scheduledStart: 1 })
     .toArray();
 
-  const identifier = deleteInfo.identifier.toLowerCase();
-  let taskToDelete = null;
+  const deletedIds = new Set();
+  const successfullyDeleted = [];
 
-  if (deleteInfo.currentTime) {
-    taskToDelete = allTasks.find((t: any) => {
-      const titleMatch = t.title.toLowerCase().includes(identifier);
-      const hourMatch =
-        new Date(t.scheduledStart).getHours() === deleteInfo.currentTime!.hour;
-      return titleMatch && hourMatch;
-    });
-  }
+  for (const deleteInfo of deleteList) {
+    const identifier = deleteInfo.identifier ? deleteInfo.identifier.toLowerCase() : "";
+    let taskToDelete = null;
 
-  if (!taskToDelete) {
-    const matchingTasks = allTasks.filter((t: any) =>
-      t.title.toLowerCase().includes(identifier),
-    );
+    // 1. Try exact ID match first
+    if (deleteInfo.taskId) {
+      taskToDelete = allTasks.find((t: any) => t._id.toString() === deleteInfo.taskId && !deletedIds.has(t._id.toString()));
+    }
 
-    if (matchingTasks.length === 1) {
-      taskToDelete = matchingTasks[0];
-    } else if (matchingTasks.length > 1) {
-      let message = `I found multiple "${deleteInfo.identifier}" blocks. Which one to cancel?\n\n`;
-      matchingTasks.forEach((t: any, i: number) => {
-        message += `${i + 1}. ${formatTime(t.scheduledStart)} - ${t.title}\n`;
+    // 2. Fallback to heuristic
+    if (!taskToDelete && deleteInfo.currentTime && identifier) {
+      taskToDelete = allTasks.find((t: any) => {
+        if (deletedIds.has(t._id.toString())) return false;
+        const fullTitle = `${t.title} ${t.subject || ""}`.toLowerCase();
+        const titleMatch = fullTitle.includes(identifier) || identifier.includes(t.title.toLowerCase());
+
+        const istDateStr = new Date(t.scheduledStart).toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+        const hourMatch = new Date(istDateStr).getHours() === deleteInfo.currentTime.hour;
+
+        return titleMatch && hourMatch;
       });
-      await bot.sendMessage(chatId, message);
-      return;
+    }
+
+    // 3. Fallback to fuzzy
+    if (!taskToDelete && identifier) {
+      const matchingTasks = allTasks.filter((t: any) => {
+        if (deletedIds.has(t._id.toString())) return false;
+        const fullTitle = `${t.title} ${t.subject || ""}`.toLowerCase();
+        return fullTitle.includes(identifier) || identifier.includes(t.title.toLowerCase());
+      });
+
+      if (matchingTasks.length === 1) {
+        taskToDelete = matchingTasks[0];
+      } else if (matchingTasks.length > 1 && deleteList.length === 1) {
+        let message = `I found multiple "${deleteInfo.identifier}" blocks. Which one to cancel?\n\n`;
+        matchingTasks.forEach((t: any, i: number) => {
+          message += `${i + 1}. ${formatTime(t.scheduledStart)} - ${t.title}\n`;
+        });
+        await bot.sendMessage(chatId, message);
+        return;
+      }
+    }
+
+    if (taskToDelete) {
+      deletedIds.add(taskToDelete._id.toString());
+      successfullyDeleted.push(taskToDelete);
+
+      // Clean up machine
+      try {
+        const { cancelAllTaskJobs } = await import("../task-machine.service.js");
+        await cancelAllTaskJobs(taskToDelete._id.toString());
+      } catch { }
+
+      await db.collection("actionStations").deleteOne({ _id: taskToDelete._id });
     }
   }
 
-  if (!taskToDelete) {
+  if (successfullyDeleted.length === 0) {
     await bot.sendMessage(
       chatId,
-      `Couldn't find "${deleteInfo.identifier}". Use /today to see your blocks.`,
+      `Couldn't find any blocks to cancel. Use /today to see your schedule.`,
     );
     return;
   }
 
-  // Clean up machine
-  try {
-    const { cancelAllTaskJobs } = await import("../task-machine.service.js");
-    await cancelAllTaskJobs(taskToDelete._id.toString());
-  } catch { }
+  let defaultMsg = "";
+  if (successfullyDeleted.length === 1) {
+    const t = successfullyDeleted[0];
+    const subject = t.subject ? ` [${t.subject}]` : "";
+    defaultMsg = `✅ Cancelled: <b>${t.title}</b>${subject} (was at ${formatTime(t.scheduledStart)})`;
+  } else {
+    defaultMsg = `✅ Cancelled ${successfullyDeleted.length} study blocks.`;
+  }
 
-  await db.collection("actionStations").deleteOne({ _id: taskToDelete._id });
+  const responseMsg = result.replyMessage
+    ? result.replyMessage.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/\*(.*?)\*/g, "<i>$1</i>")
+    : defaultMsg;
 
-  const subject = taskToDelete.subject ? ` [${taskToDelete.subject}]` : "";
-  await bot.sendMessage(
-    chatId,
-    `✅ Cancelled: <b>${taskToDelete.title}</b>${subject} (was at ${formatTime(taskToDelete.scheduledStart)})`,
-    { parse_mode: "HTML" },
-  );
+  await bot.sendMessage(chatId, responseMsg, { parse_mode: "HTML" });
 
   await clearHistory(chatId.toString());
 }
@@ -480,19 +512,21 @@ async function handleSlotSelected(
     return;
   }
 
-  const lastTaskCapture = [...history].reverse().find((h: any) => {
-    if (h.role !== "assistant") return false;
-    try {
-      const parsed = JSON.parse(h.content);
-      return parsed.type === "task_captured" && parsed.task;
-    } catch {
-      return false;
-    }
-  });
+  let task = result.task;
 
-  const task = lastTaskCapture
-    ? JSON.parse(lastTaskCapture.content).task
-    : result.task;
+  if (!task) {
+    const lastTaskCapture = [...history].reverse().find((h: any) => {
+      if (h.role !== "assistant") return false;
+      try {
+        const parsed = JSON.parse(h.content);
+        return parsed.type === "task_captured" && parsed.task;
+      } catch {
+        return false;
+      }
+    });
+
+    task = lastTaskCapture ? JSON.parse(lastTaskCapture.content).task : null;
+  }
 
   if (!task) {
     await bot.sendMessage(
@@ -529,11 +563,11 @@ async function handleSlotSelected(
   await clearHistory(chatId.toString());
 
   const subjectTag = task.subject ? ` [${task.subject}]` : "";
-  await bot.sendMessage(
-    chatId,
-    `✅ <b>Locked in!</b>\n\n${task.emoji} ${task.title}${subjectTag}\n📅 ${formatDateTime(taskDoc.scheduledStart)} (${task.durationMinutes} min)\n\nI'll remind you 5 minutes before.`,
-    { parse_mode: "HTML" },
-  );
+  const responseMsg = result.replyMessage
+    ? result.replyMessage.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>").replace(/\*(.*?)\*/g, "<i>$1</i>")
+    : `✅ <b>Locked in!</b>\n\n${task.emoji} ${task.title}${subjectTag}\n📅 ${formatDateTime(taskDoc.scheduledStart)} (${task.durationMinutes} min)\n\nI'll remind you 5 minutes before.`;
+
+  await bot.sendMessage(chatId, responseMsg, { parse_mode: "HTML" });
 }
 
 async function handleSlotRejected(

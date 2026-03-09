@@ -98,6 +98,10 @@ export function startWeeklyCheckInWorker() {
           weeklyContext,
         );
 
+        const formattedResponse = response
+          .replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")
+          .replace(/\*(.*?)\*/g, "<i>$1</i>");
+
         console.log(`\n📊 Weekly review for ${user.name}:\n${response}\n`);
 
         // Build the message
@@ -155,7 +159,7 @@ export function startWeeklyCheckInWorker() {
           `${trend}` +
           `${subjectBreakdown}` +
           `${avoidanceSection}\n\n` +
-          `${response}`;
+          `${formattedResponse}`;
 
         await sendTelegramMessage(user._id, message, "HTML");
 

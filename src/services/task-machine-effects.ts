@@ -72,13 +72,15 @@ export async function executeEffects(
   }
 
   // Entered active.overdue → send overdue reminder
-  if (newState === "active.overdue") {
+  if (newState === "active.overdue" && previousState !== "active.overdue") {
     await sendOverdueReminder(context);
     await scheduleSilenceTimeout(taskId, context.level);
   }
 
   // Entered active.escalating → send escalation message
-  if (newState === "active.escalating") {
+  // (Note: escalating re-enters on NEXT_ESCALATION or SILENCE_TIMEOUT, so previousState CAN equal newState.
+  // We just ensure we don't send it if the event was a user pressing an unhandled button.)
+  if (newState === "active.escalating" && !event.type.startsWith("USER_")) {
     await sendEscalationMessage(context);
     await scheduleSilenceTimeout(taskId, context.level);
     trackEvent(context.chatId, "escalation_triggered", {

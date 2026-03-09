@@ -21,21 +21,25 @@ export async function checkRateLimit(
   messageText?: string,
   photoSize?: number,
 ): Promise<RateLimitResult> {
-  // Message size check
   if (messageText && messageText.length > LIMITS.MAX_MESSAGE_LENGTH) {
-    console.log(`[RATE] Message too long | chatId=${chatId} | length=${messageText.length}`);
+    console.log(
+      `[RATE] Message too long | chatId=${chatId} | length=${messageText.length}`
+    );
+
     return {
       allowed: false,
-      reason: `Message too long (${messageText.length} chars). Keep it under ${LIMITS.MAX_MESSAGE_LENGTH} characters.`,
+      reason: `That message is a bit too long. Try sending a shorter version or split it into two messages.`,
     };
   }
 
   // Photo size check
   if (photoSize && photoSize > LIMITS.MAX_PHOTO_SIZE) {
-    console.log(`[RATE] Photo too large | chatId=${chatId} | size=${photoSize}`);
+    console.log(
+      `[RATE] Photo too large | chatId=${chatId} | size=${photoSize}`
+    );
     return {
       allowed: false,
-      reason: `Photo is too large. Please send a smaller image (under 5MB).`,
+      reason: `That image is too large to process. Please send a smaller photo (under 5MB).`,
     };
   }
 
@@ -48,7 +52,7 @@ export async function checkRateLimit(
     console.log(`[RATE] User rate limited | chatId=${chatId} | count=${count}`);
     return {
       allowed: false,
-      reason: `You're sending too many messages. Limit is ${LIMITS.MESSAGES_PER_HOUR}/hour. Try again in a bit.`,
+      reason: `Too many messages in a short time. Take a short pause — less talk, more work. Try again shortly.`,
     };
   }
 

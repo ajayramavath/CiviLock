@@ -114,20 +114,6 @@ async function handleStateMachineCallback(
     return;
   }
 
-  if (event.type === "USER_SNOOZED") {
-    try {
-      await bot.editMessageReplyMarkup(
-        { inline_keyboard: [] },
-        {
-          chat_id: query.message!.chat.id,
-          message_id: query.message!.message_id,
-        },
-      );
-    } catch (e) {
-      // Message may already be edited
-    }
-  }
-
   // Acknowledge the button press
   const ackMap: Record<string, string> = {
     USER_COMPLETED: "✅ Completed!",
@@ -138,8 +124,25 @@ async function handleStateMachineCallback(
     REASON_PROVIDED: "📝 Reason noted",
   };
 
+  const actionText = ackMap[event.type] || "✓ Noted";
+
+  // Always remove the buttons and update the message text
+  try {
+    const originalText = query.message?.text || "Task Update";
+    const newText = `${originalText}\n\n<i>${actionText}</i>`;
+
+    await bot.editMessageText(newText, {
+      chat_id: query.message!.chat.id,
+      message_id: query.message!.message_id,
+      reply_markup: { inline_keyboard: [] },
+      parse_mode: "HTML",
+    });
+  } catch (e) {
+    // Message may already be edited or text might be identical
+  }
+
   await bot.answerCallbackQuery(query.id, {
-    text: ackMap[event.type] || "✓ Noted",
+    text: actionText,
   });
 }
 
@@ -196,6 +199,7 @@ async function handleTaskStatusCallback(
     chat_id: chatId,
     message_id: query.message!.message_id,
     parse_mode: "HTML",
+    reply_markup: { inline_keyboard: [] },
   });
 
   await bot.answerCallbackQuery(query.id, { text: `${emoji} Noted!` });
@@ -264,6 +268,7 @@ async function handleSnoozeCallback(
       chat_id: chatId,
       message_id: query.message!.message_id,
       parse_mode: "HTML",
+      reply_markup: { inline_keyboard: [] },
     },
   );
 

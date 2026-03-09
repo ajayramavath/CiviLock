@@ -66,9 +66,10 @@ export async function processUserMessage(
           $gte: currentCycle.startDateTime,
           $lte: currentCycle.endDateTime,
         },
+        status: "pending",
       })
       .sort({ scheduledStart: 1 })
-      .project({ title: 1, subject: 1, scheduledStart: 1, scheduledEnd: 1 })
+      .project({ _id: 1, title: 1, subject: 1, scheduledStart: 1, scheduledEnd: 1 })
       .toArray(),
 
     db
@@ -79,9 +80,10 @@ export async function processUserMessage(
           $gte: nextCycle.startDateTime,
           $lte: nextCycle.endDateTime,
         },
+        status: "pending",
       })
       .sort({ scheduledStart: 1 })
-      .project({ title: 1, subject: 1, scheduledStart: 1, scheduledEnd: 1 })
+      .project({ _id: 1, title: 1, subject: 1, scheduledStart: 1, scheduledEnd: 1 })
       .toArray(),
   ]);
 
@@ -91,15 +93,22 @@ export async function processUserMessage(
       : tasks
         .map(
           (t) =>
-            `  ${formatTime(t.scheduledStart)}-${formatTime(t.scheduledEnd)}: ${t.title}${t.subject ? ` [${t.subject}]` : ""}`,
+            `  [ID: ${t._id}] ${formatTime(t.scheduledStart)}-${formatTime(t.scheduledEnd)}: ${t.title}${t.subject ? ` [${t.subject}]` : ""}`,
         )
         .join("\n");
 
-  // UPSC profile context
   const upsc = user.upscProfile;
   const upscContext = upsc
     ? `\nUPSC PROFILE:\nTarget: Prelims ${upsc.targetYear}\nAttempt: #${upsc.attemptNumber}\nOptional: ${upsc.optionalSubject || "Not set"}\nWeak subjects: ${upsc.weakSubjects?.length > 0 ? upsc.weakSubjects.map((s: string) => s.split(" (")[0]).join(", ") : "None"}`
     : "";
+
+  let routineContext = "";
+  if (user.studyPlan) {
+    const rawContent = typeof user.studyPlan.rawInput === 'string' && user.studyPlan.rawInput.length > 0
+      ? user.studyPlan.rawInput
+      : "See attached routine definition / photo";
+    routineContext = `\nPERMANENT WEEKLY ROUTINE (OVERARCHING SCHEDULE):\n${rawContent}`;
+  }
 
   const subjectList = UPSC_SUBJECTS.map((s) => s.split(" (")[0]).join(", ");
 
@@ -112,6 +121,7 @@ Wake: ${formatHourMin(user.sleepSchedule.wakeHour, user.sleepSchedule.wakeMinute
 Sleep: ${formatHourMin(user.sleepSchedule.sleepHour, user.sleepSchedule.sleepMinute)}
 Current time: ${new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true })}
 ${upscContext}
+${routineContext}
 
 TODAY'S SCHEDULE:
 ${formatSchedule(currentTasks)}
@@ -139,33 +149,40 @@ Examples:
 
 Determine intent from the user's message and conversation history:
 
-1. NEW TASK - user expressing something they need to do:
+1. NEW TASK (No specific time) - user expressing something they need to do:
    type: "task_captured"
    - Extract concise title, estimate duration, assign UPSC subject, suggest 2 open slots
    - Default to tomorrow unless user implies today/now/tonight
+   - FORBIDDEN: Do not use this type if the user provided a specific time!
 
-2. UPDATE TASK - user wants to move/reschedule/change an existing task:
+2. NEW TASK (Specific time given) - user provides both the task AND the exact time:
+   type: "slot_confirmed"
+   - Include both 'task' and 'selectedSlot' in the JSON
+   - Skip suggesting slots entirely
+   - Example: "Add history at 1:30 am" -> MUST return slot_confirmed, NEVER task_captured.
+
+3. UPDATE TASK - user wants to move/reschedule/change an existing task:
    type: "task_updated"
-   - Identify task by title AND time
-   - Include taskToUpdate with identifier, currentTime, date, newSlot if specified
+   - Identify task by its exact ID from the schedule
+   - Include taskToUpdate with taskId, and newSlot if specified
 
-3. DELETE TASK - user wants to cancel/remove a task:
+4. DELETE TASK - user wants to cancel/remove a task:
    type: "task_deleted"
-   - Identify by title AND time context
+   - Identify task by its exact ID from the schedule
 
-4. RESPONDING TO SLOTS - user replying to slot suggestions:
+5. RESPONDING TO SLOTS - user replying to slot suggestions:
    - Accepting first → type: "slot_confirmed", include selectedSlot
    - Picking specific → type: "slot_selected", include selectedSlot
    - Rejecting → type: "slot_rejected", suggest 2 different slots
 
-5. NOT A TASK - clearly not task management → type: "not_a_task"
+6. NOT A TASK - clearly not task management → type: "not_a_task"
 
 JSON format:
 {
   "type": "task_captured|task_updated|task_deleted|slot_confirmed|slot_selected|slot_rejected|not_a_task",
   "task": { "title": "...", "durationMinutes": 30, "emoji": "📚", "subject": "GS2" },
-  "taskToUpdate": { "identifier": "...", "currentTime": { "hour": 14, "minute": 0 }, "date": "today", "newSlot": { "hour": 20, "minute": 0, "date": "today" }, "newDuration": 90 },
-  "taskToDelete": { "identifier": "...", "currentTime": { "hour": 10, "minute": 0 }, "date": "today" },
+  "taskToUpdate": { "taskId": "...", "newSlot": { "hour": 20, "minute": 0, "date": "today" }, "newDuration": 90 },
+  "taskToDelete": { "taskId": "..." },
   "suggestedSlots": [ { "hour": 21, "minute": 0, "date": "today", "reason": "..." } ],
   "selectedSlot": { "hour": 21, "minute": 0, "date": "today" },
   "replyMessage": "Plain text reply to show user"

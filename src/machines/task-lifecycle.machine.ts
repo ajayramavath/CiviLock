@@ -49,6 +49,9 @@ export const taskLifecycleMachine = createMachine(
       scheduled: {
         on: {
           PRE_TASK_WINDOW: { target: "preTask" },
+          START_TIME_REACHED: { target: "active" },
+          OVERDUE_THRESHOLD: { target: "active.overdue" },
+          END_TIME_REACHED: { target: "endTimeCheckIn" },
           // User can complete/skip before the task even starts
           USER_COMPLETED: { target: "resolved.completed" },
           USER_SKIPPED: { target: "resolved.skippedByUser" },
@@ -71,6 +74,8 @@ export const taskLifecycleMachine = createMachine(
           USER_SKIPPED: { target: "resolved.skippedByUser" },
           USER_COMPLETED: { target: "resolved.completed" },
           START_TIME_REACHED: { target: "active" },
+          OVERDUE_THRESHOLD: { target: "active.overdue" },
+          END_TIME_REACHED: { target: "endTimeCheckIn" },
           // Silence in preTask — just move to awaiting start
           SILENCE_TIMEOUT: { target: "awaitingStart" },
         },
@@ -80,6 +85,8 @@ export const taskLifecycleMachine = createMachine(
       awaitingStart: {
         on: {
           START_TIME_REACHED: { target: "active" },
+          OVERDUE_THRESHOLD: { target: "active.overdue" },
+          END_TIME_REACHED: { target: "endTimeCheckIn" },
           USER_COMPLETED: { target: "resolved.completed" },
           USER_SKIPPED: { target: "resolved.skippedByUser" },
         },
@@ -96,6 +103,7 @@ export const taskLifecycleMachine = createMachine(
             { target: "resolutionRequired", guard: "isLevel2" },
             { target: "resolved.skippedByUser" },
           ],
+          USER_CONFIRMED: { target: ".onTime" },
           END_TIME_REACHED: { target: "#taskLifecycle.endTimeCheckIn" },
         },
         states: {
@@ -195,7 +203,7 @@ export const taskLifecycleMachine = createMachine(
 
       // ── Terminal states ────────────────────────────────────────────────
       resolved: {
-        type: "final",
+        initial: "completed",
         entry: ["emitAnalyticsEvent", "cleanupMachine"],
         states: {
           completed: { type: "final" },

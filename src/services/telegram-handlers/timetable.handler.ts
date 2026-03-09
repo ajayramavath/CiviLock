@@ -78,6 +78,17 @@ export async function handleTimetableCallback(
 
   await bot.answerCallbackQuery(query.id);
 
+  try {
+    const originalText = query.message?.text || "Schedule Processed";
+    const statusText = data === "tt_confirm" ? "✅ Confirmed" : "❌ Cancelled";
+    await bot.editMessageText(`${originalText}\n\n<i>${statusText}</i>`, {
+      chat_id: chatId,
+      message_id: query.message!.message_id,
+      reply_markup: { inline_keyboard: [] },
+      parse_mode: "HTML",
+    });
+  } catch { }
+
   if (data === "tt_confirm") {
     console.log(
       `[TT] Confirm pressed | hasParsedSchedule=${!!state.data?.parsedSchedule} | blockCount=${state.data?.parsedSchedule?.blocks?.length || 0}`,

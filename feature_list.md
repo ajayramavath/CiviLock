@@ -121,14 +121,24 @@
 - User identification with UPSC profile properties for cohort analysis
 
 ## Technical Foundation
-- Telegram Bot API
+- Telegram Bot API (user bot + dedicated admin bot for alerts)
 - XState state machines (one per task) persisted in Redis
 - BullMQ job queues for timed events and scheduled jobs
-- MongoDB for users, tasks, study plans, analytics
+- MongoDB Atlas for users, tasks, study plans, analytics
+- Redis container for state machines, job queues, and rate limiting
 - Anthropic Claude API for NLP and coaching tone
 - Centralized LLM service with automatic usage tracking
 - Per-user job scheduling (not global crons)
+- IST-aware timezone utilities — all scheduling correct regardless of server TZ
+- PostHog SDK for product analytics
+
+## Deployment
+- DigitalOcean Droplet — 2GB RAM / 1 CPU / 50GB SSD
+- MongoDB Atlas — 512MB shared cluster
+- Docker Compose — bot + Redis container
+- Dockerfile based on `oven/bun:1`
+- `.dockerignore` for clean builds
 
 ---
 
-*Last updated: 2026-03-07*
+*Last updated: 2026-03-08*

@@ -290,6 +290,12 @@ export async function handleOnboardingCallback(
       history: [],
     });
     await bot.answerCallbackQuery(query.id);
+    try {
+      await bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        { chat_id: chatId, message_id: query.message!.message_id },
+      );
+    } catch { }
     await bot.sendMessage(
       chatId,
       `🎯 <b>Prelims ${year}</b> — ${daysUntilPrelims(year)} days\n\n<b>Which attempt?</b>`,
@@ -318,6 +324,12 @@ export async function handleOnboardingCallback(
       history: [],
     });
     await bot.answerCallbackQuery(query.id);
+    try {
+      await bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        { chat_id: chatId, message_id: query.message!.message_id },
+      );
+    } catch { }
     await bot.sendMessage(
       chatId,
       `✅ Attempt #${attempt}\n\n<b>Optional subject?</b>\n<i>"Public Administration", "Sociology", "Geography"</i>`,
@@ -336,6 +348,12 @@ export async function handleOnboardingCallback(
       history: [],
     });
     await bot.answerCallbackQuery(query.id);
+    try {
+      await bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        { chat_id: chatId, message_id: query.message!.message_id },
+      );
+    } catch { }
     await sendWeakSelector(bot, chatId, []);
     return true;
   }
@@ -372,6 +390,12 @@ export async function handleOnboardingCallback(
       history: [],
     });
     await bot.answerCallbackQuery(query.id);
+    try {
+      await bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        { chat_id: chatId, message_id: query.message!.message_id },
+      );
+    } catch { }
     const list =
       weak.length > 0
         ? weak.map((s: string) => s.split(" (")[0]).join(", ")
@@ -422,6 +446,12 @@ export async function handleOnboardingCallback(
         { $set: { strictnessLevel: level, upscProfile } },
       );
     await bot.answerCallbackQuery(query.id);
+    try {
+      await bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        { chat_id: chatId, message_id: query.message!.message_id },
+      );
+    } catch { }
 
     await bot.sendMessage(
       chatId,
