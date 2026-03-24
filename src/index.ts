@@ -19,9 +19,14 @@ import {
 } from "./services/checkin-scheduler.service";
 import {
   startNightlySchedulerWorker,
-  scheduleNightlyBlocks,
+  setupNightlyScheduler,
   nightlySchedulerQueue,
 } from "./jobs/nightly-scheduler";
+import {
+  startMorningNudgeWorker,
+  setupMorningNudge,
+  morningNudgeQueue,
+} from "./jobs/morning-nudge";
 import {
   initMonitoring,
   setupExpressErrorHandler,
@@ -47,7 +52,6 @@ function adminAuth(req: Request, res: Response, next: NextFunction) {
   const expectedPass = process.env.ADMIN_PASSWORD;
 
   if (!expectedPass) {
-    // If no password set, block access entirely in production
     res.status(403).json({ error: "Admin access not configured" });
     return;
   }
@@ -83,6 +87,7 @@ createBullBoard({
     new BullMQAdapter(weeklyCheckInQueue),
     new BullMQAdapter(taskReminderQueue),
     new BullMQAdapter(nightlySchedulerQueue),
+    new BullMQAdapter(morningNudgeQueue),
   ],
   serverAdapter,
 });
@@ -102,7 +107,6 @@ app.get("/health", async (req, res) => {
   const uptimeHours = Math.floor(uptimeMs / 3600000);
   const uptimeMinutes = Math.floor((uptimeMs % 3600000) / 60000);
 
-  // Check MongoDB
   let mongoStatus = "disconnected";
   try {
     const db = getDb();
@@ -110,14 +114,12 @@ app.get("/health", async (req, res) => {
     mongoStatus = "connected";
   } catch { }
 
-  // Check Redis
   let redisStatus = "disconnected";
   try {
     const pong = await connection.ping();
     redisStatus = pong === "PONG" ? "connected" : "error";
   } catch { }
 
-  // Queue stats
   async function queueStats(queue: any) {
     try {
       const [waiting, active, failed, delayed] = await Promise.all([
@@ -132,12 +134,13 @@ app.get("/health", async (req, res) => {
     }
   }
 
-  const [dailyStats, weeklyStats, reminderStats, nightlyStats] =
+  const [dailyStats, weeklyStats, reminderStats, nightlyStats, morningStats] =
     await Promise.all([
       queueStats(dailyCheckInQueue),
       queueStats(weeklyCheckInQueue),
       queueStats(taskReminderQueue),
       queueStats(nightlySchedulerQueue),
+      queueStats(morningNudgeQueue),
     ]);
 
   const overallStatus =
@@ -163,6 +166,7 @@ app.get("/health", async (req, res) => {
       "weekly-checkIn": weeklyStats,
       "task-reminders": reminderStats,
       "nightly-scheduler": nightlyStats,
+      "morning-nudge": morningStats,
     },
   });
 });
@@ -228,26 +232,31 @@ async function scheduleExistingUsers() {
       await scheduleDailyCheckin(user._id, user.dailyCheckInTime);
       await scheduleWeeklyCheckin(user._id, user.dailyCheckInTime);
     }
-    if (user.sleepSchedule) {
-      await scheduleNightlyBlocks(
-        user._id,
-        user.sleepSchedule.sleepHour,
-        user.sleepSchedule.sleepMinute ?? 0,
-      );
-    }
+    // Nightly blocks are now handled by the global hourly scheduler,
+    // no per-user scheduling needed
   }
 }
 
 async function start() {
-  initMonitoring(); // Must be first — catches startup crashes
+  initMonitoring();
   initPostHog();
   await connectDb(dbUrl);
+
+  // Start all workers
   startDailyCheckInWorker();
   startWeeklyCheckInWorker();
   startTaskReminderWorker();
   startNightlySchedulerWorker();
+  startMorningNudgeWorker();
+
+  // Schedule recurring jobs
+  await setupNightlyScheduler();
+  await setupMorningNudge();
+
+  // Schedule check-ins for existing users
   await scheduleExistingUsers();
-  setupExpressErrorHandler(app); // Must be AFTER all routes
+
+  setupExpressErrorHandler(app);
   app.listen(PORT, () => {
     console.log(`listening on port ${PORT}`);
     console.log(`📊 Bull-Board: http://localhost:${PORT}/admin/queues`);

@@ -52,3 +52,30 @@ export function todayMidnightIST(): Date {
 export function addDays(date: Date, days: number): Date {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 }
+
+
+export function formatHourMin(hour: number, minute: number): string {
+  const period = hour >= 12 ? "PM" : "AM";
+  const h = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+  return `${h}:${minute.toString().padStart(2, "0")} ${period}`;
+}
+
+export function formatTime(date: Date): string {
+  return new Date(date).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata",
+  });
+}
+
+export function formatDateTime(date: Date): string {
+  return new Date(date).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Asia/Kolkata",
+  });
+}

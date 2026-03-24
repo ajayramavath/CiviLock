@@ -1,6 +1,14 @@
 // src/jobs/nightly-scheduler.ts
+// Runs every hour. For users whose "night time" is now:
+// 1. Check if plan needs review → send reminder
+// 2. Generate tomorrow's blocks from template
+// 3. Send summary notification
+//
+// Handles three types of users:
+// - Users with sleepSchedule.sleepHour → triggers at their sleep hour
+// - Users with no sleepSchedule but have a plan → triggers at 10pm IST (default)
+
 import { Worker, Queue } from "bullmq";
-import { ObjectId } from "mongodb";
 import { connection } from "../queue.js";
 import { getDb } from "../db.js";
 import {
@@ -14,60 +22,36 @@ export const nightlySchedulerQueue = new Queue("nightly-scheduler", {
   connection,
 });
 
-// ─── Schedule per-user nightly task generation (30 min before sleep) ─────────
+// ─── Per-user scheduling (called from callback handler on schedule confirm) ──
 
 export async function scheduleNightlyBlocks(
-  userId: ObjectId | string,
+  userId: any,
   sleepHour: number,
   sleepMinute: number,
 ): Promise<void> {
-  // Calculate 30 minutes before sleep time
-  let scheduleHour = sleepHour;
-  let scheduleMinute = sleepMinute - 30;
-
-  if (scheduleMinute < 0) {
-    scheduleMinute += 60;
-    scheduleHour -= 1;
-    if (scheduleHour < 0) scheduleHour += 24;
-  }
-
-  const schedulerId = `nightly-blocks-${userId}`;
-
-  await nightlySchedulerQueue.upsertJobScheduler(
-    schedulerId,
-    {
-      pattern: `${scheduleMinute} ${scheduleHour} * * *`,
-      tz: "Asia/Kolkata",
-    },
-    {
-      name: "nightly-blocks",
-      data: { userId: userId.toString() },
-      opts: {
-        removeOnComplete: true,
-        removeOnFail: false,
-        attempts: 3,
-        backoff: {
-          type: "exponential",
-          delay: 5000,
-        },
-      },
-    },
-  );
-
-  const timeStr = `${scheduleHour}:${String(scheduleMinute).padStart(2, "0")}`;
+  // This is a no-op now — the global hourly check handles everything.
+  // Kept for backward compatibility with callback.handler.ts.
   console.log(
-    `✅ Nightly scheduler upserted for user ${userId} at ${timeStr} IST (30 min before sleep)`,
+    `[Nightly] scheduleNightlyBlocks called for user ${userId} (sleep ${sleepHour}:${sleepMinute}) — handled by global scheduler`,
   );
 }
 
-export async function removeNightlySchedule(
-  userId: ObjectId | string,
-): Promise<void> {
-  const schedulerId = `nightly-blocks-${userId}`;
-  const removed = await nightlySchedulerQueue.removeJobScheduler(schedulerId);
-  if (removed) {
-    console.log(`🗑️ Removed nightly scheduler for user ${userId}`);
-  }
+// ─── Global setup: hourly check ──────────────────────────────────────────────
+
+export async function setupNightlyScheduler(): Promise<void> {
+  await nightlySchedulerQueue.upsertJobScheduler(
+    "nightly-global",
+    {
+      pattern: "0 * * * *", // every hour on the hour
+      tz: "Asia/Kolkata",
+    },
+    {
+      name: "nightly-schedule-check",
+      data: {},
+      opts: { removeOnComplete: true, removeOnFail: false },
+    },
+  );
+  console.log("✅ Nightly scheduler set up (hourly check)");
 }
 
 // ─── Worker ──────────────────────────────────────────────────────────────────
@@ -75,98 +59,116 @@ export async function removeNightlySchedule(
 export function startNightlySchedulerWorker() {
   const worker = new Worker(
     "nightly-scheduler",
-    async (job) => {
-      const { userId } = job.data;
+    async () => {
       const db = getDb();
+      const now = new Date();
+      const currentHour = parseInt(
+        now.toLocaleString("en-US", {
+          timeZone: "Asia/Kolkata",
+          hour: "numeric",
+          hour12: false,
+        }),
+      );
 
-      const user = await db
+      // ── Group 1: Users with sleepSchedule matching current hour ────
+      const usersWithSleep = await db
         .collection("users")
-        .findOne({ _id: new ObjectId(userId) });
+        .find({
+          "studyPlan.blocks": { $exists: true, $not: { $size: 0 } },
+          "sleepSchedule.sleepHour": currentHour,
+        })
+        .toArray();
 
-      if (!user || !user.onboardingComplete) return;
+      // ── Group 2: Users without sleepSchedule → default to 12am ──
+      let usersDefault: any[] = [];
+      if (currentHour === 0) {
+        usersDefault = await db
+          .collection("users")
+          .find({
+            "studyPlan.blocks": { $exists: true, $not: { $size: 0 } },
+            sleepSchedule: null,
+          })
+          .toArray();
+      }
 
-      console.log(`🌙 Nightly scheduler running for ${user.name}`);
+      const allUsers = [...usersWithSleep, ...usersDefault];
 
-      try {
-        // ── Check if study plan needs review ─────────────────────────────
-        if (user.studyPlan) {
-          const review = shouldReviewPlan(user.studyPlan);
+      // Dedupe
+      const seen = new Set<string>();
+      const users = allUsers.filter((u) => {
+        const id = u._id.toString();
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
 
-          if (review === "now") {
-            await bot.sendMessage(
-              user.telegramChatId,
-              `📋 <b>Time to check your study plan.</b>\n\n` +
-              `Your current schedule: <i>${user.studyPlan.scope.description}</i>\n\n` +
-              `Is this still what you're following? If your schedule has changed, send me the new one — text or photo.\n\n` +
-              `If it's still good, just say "same schedule" and I'll keep going.`,
-              { parse_mode: "HTML" },
-            );
-          } else if (review === "soon") {
-            await bot.sendMessage(
-              user.telegramChatId,
-              `⏳ Heads up — I'll be checking in on your study plan soon. If anything's changed, send the updated schedule anytime.`,
-            );
-          }
+      if (users.length === 0) return;
+
+      console.log(
+        `🌙 Nightly scheduler: ${users.length} users at hour ${currentHour}`,
+      );
+
+      for (const user of users) {
+        try {
+          await processNightlyForUser(user, db);
+        } catch (err: any) {
+          console.error(`❌ Nightly ${user.name}: ${err.message}`);
+          captureJobError("nightly_scheduler", user._id, err);
         }
-
-        // ── Generate tomorrow's study blocks ─────────────────────────────
-        if (!user.studyPlan?.blocks?.length) {
-          console.log(`  ⏭️ No study plan for ${user.name}, skipping`);
-          return;
-        }
-
-        const result = await generateDailyBlocks(user._id);
-
-        if (result.created > 0) {
-          const blockList = result.blocks
-            .map(
-              (b) =>
-                `${getEmoji(b.subject)} ${b.title} — ${fmtTime(b.start)}`,
-            )
-            .join("\n");
-
-          const totalMinutes = result.blocks.reduce((sum, b) => {
-            const diff = b.end.getTime() - b.start.getTime();
-            return sum + Math.round(diff / 60000);
-          }, 0);
-          const totalHours = Math.round((totalMinutes / 60) * 10) / 10;
-
-          await bot.sendMessage(
-            user.telegramChatId,
-            `🌙 <b>Tomorrow's schedule is ready</b>\n\n` +
-            `${blockList}\n\n` +
-            `📊 ${result.created} blocks · ${totalHours}h of study\n` +
-            `I'll remind you 5 min before each block.\n\n` +
-            `Sleep well! 😴`,
-            { parse_mode: "HTML" },
-          );
-
-          console.log(
-            `  ✅ Created ${result.created} blocks for ${user.name}`,
-          );
-        } else {
-          console.log(
-            `  ⏭️ Blocks already exist for ${user.name}'s tomorrow`,
-          );
-        }
-      } catch (err: any) {
-        console.error(
-          `❌ Nightly scheduler failed for ${user.name}: ${err.message}`,
-        );
       }
     },
     { connection },
   );
 
-  worker.on("completed", (job) => {
-    console.log(`✅ Nightly blocks job completed for ${job.data.userId}`);
-  });
-
-  worker.on("failed", (job, err) => {
-    captureJobError("nightly-scheduler", job, err);
-  });
-
+  worker.on("failed", (_, err) =>
+    console.error(`❌ Nightly scheduler: ${err.message}`),
+  );
   console.log("✅ Nightly scheduler worker started");
+}
+
+// ─── Per-user nightly processing ─────────────────────────────────────────────
+
+async function processNightlyForUser(user: any, db: any): Promise<void> {
+  // 1. Check plan review
+  if (user.studyPlan) {
+    const review = shouldReviewPlan(user.studyPlan);
+
+    if (review === "now") {
+      await bot.sendMessage(
+        user.telegramChatId,
+        `📋 <b>Time to check your study plan.</b>\n\n` +
+        `Your current schedule: <i>${user.studyPlan.scope.description}</i>\n\n` +
+        `Is this still what you're following? If your schedule has changed, send me the new one — text or photo.\n\n` +
+        `If it's still good, just say "same schedule" and I'll keep going.`,
+        { parse_mode: "HTML" },
+      );
+    } else if (review === "soon") {
+      await bot.sendMessage(
+        user.telegramChatId,
+        `⏳ Heads up — I'll be checking in on your study plan soon. If anything's changed, send the updated schedule anytime.`,
+      );
+    }
+  }
+
+  // 2. Generate tomorrow's blocks
+  const result = await generateDailyBlocks(user._id);
+
+  if (result.created > 0) {
+    const blockList = result.blocks
+      .map((b) => `${getEmoji(b.subject)} ${b.title} — ${fmtTime(b.start)}`)
+      .join("\n");
+
+    const name = user.profile?.name || user.name || "";
+    await bot.sendMessage(
+      user.telegramChatId,
+      `🌙 <b>Tomorrow's ready${name ? `, ${name}` : ""}</b>\n\n` +
+      `${result.created} blocks scheduled:\n\n${blockList}\n\n` +
+      `I'll remind you before each one. Sleep well.`,
+      { parse_mode: "HTML" },
+    );
+
+    console.log(`  ✅ ${user.name}: ${result.created} blocks generated`);
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -70,31 +70,53 @@ Day numbers: 0=Sunday, 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday, 6
 If all days are different, pick any day as default "blocks" and override the rest.
 If a day has no study (e.g., Sunday off), set its override to an empty array [].`;
 
+// ─── Build user context for schedule parsing ─────────────────────────────────
+
+function buildParseContext(user: any): string {
+  const optionalSubject =
+    user.upscProfile?.optionalSubject ||
+    user.profile?.optionalSubject ||
+    "Not specified";
+
+  const today = new Date().toISOString().split("T")[0];
+
+  // Time context helps the parser disambiguate AM/PM
+  let timeHint = "";
+  if (user.sleepSchedule) {
+    const wake = `${user.sleepSchedule.wakeHour}:${String(user.sleepSchedule.wakeMinute || 0).padStart(2, "0")}`;
+    const sleep = `${user.sleepSchedule.sleepHour}:${String(user.sleepSchedule.sleepMinute || 0).padStart(2, "0")}`;
+    timeHint = `\nUser's active hours: ${wake} to ${sleep} (use this to disambiguate AM/PM — e.g., "2" during active hours likely means 2 PM)`;
+  } else if (user.wakeTime || user.profile?.wakeTime) {
+    timeHint = `\nUser wakes around: ${user.wakeTime || user.profile?.wakeTime}`;
+  }
+
+  return `User's optional subject: ${optionalSubject}\nToday's date: ${today}${timeHint}`;
+}
+
 // ─── Parse text schedule ─────────────────────────────────────────────────────
 
 export async function parseSchedule(
   text: string,
   user: any,
 ): Promise<ParsedSchedule> {
-  const optionalSubject = user.upscProfile?.optionalSubject || "Not set";
-  const today = new Date().toISOString().split("T")[0];
+  const context = buildParseContext(user);
 
   console.log(
-    `[PARSE] parseSchedule called | textLength=${text.length} | optional=${optionalSubject} | date=${today}`,
+    `[PARSE] parseSchedule called | textLength=${text.length} | context=${context.split("\n").join(" | ")}`,
   );
 
   const response = await llmCall({
     chatId: user.telegramChatId,
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-sonnet-4-5-20250929",
     maxTokens: 1500,
     system: PARSE_SYSTEM_PROMPT,
     messages: [
       {
         role: "user",
-        content: `User's optional subject: ${optionalSubject}\nToday's date: ${today}\n\nSchedule:\n"${text}"`,
+        content: `${context}\n\nSchedule:\n"${text}"`,
       },
     ],
-    purpose: "schedule_parse"
+    purpose: "schedule_parse",
   });
 
   return extractResult(response);
@@ -107,13 +129,14 @@ export async function parseScheduleFromImage(
   mediaType: "image/jpeg" | "image/png" | "image/webp",
   user: any,
 ): Promise<ParsedSchedule> {
-  const optionalSubject = user.upscProfile?.optionalSubject || "Not set";
-  const today = new Date().toISOString().split("T")[0];
+  const context = buildParseContext(user);
 
   console.log(
-    `[PARSE] parseScheduleFromImage called | mediaType=${mediaType} | base64Length=${base64Image.length} | optional=${optionalSubject}`,
+    `[PARSE] parseScheduleFromImage called | mediaType=${mediaType} | base64Length=${base64Image.length}`,
   );
 
+  // Photo parsing uses Sonnet for better image understanding
+  // Still using raw client because llmCall doesn't support image content blocks
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-5-20250929",
     max_tokens: 4096,
@@ -132,12 +155,13 @@ export async function parseScheduleFromImage(
           },
           {
             type: "text",
-            text: `User's optional subject: ${optionalSubject}\nToday's date: ${today}\n\nExtract the study timetable from this image.`,
+            text: `${context}\n\nExtract the study timetable from this image.`,
           },
         ],
       },
     ],
   });
+
   await trackAPIUsage(
     user.telegramChatId,
     "claude-sonnet-4-5-20250929",
@@ -166,7 +190,6 @@ interface ParsedSchedule {
 }
 
 function extractResult(response: any): ParsedSchedule {
-  // Handle both raw Anthropic response and llmCall result
   const rawText = response.text
     ? response.text
     : response.content?.[0]?.type === "text"
@@ -182,9 +205,6 @@ function extractResult(response: any): ParsedSchedule {
 
   console.log(
     `[PARSE] Raw AI response (first 500 chars): ${rawText.substring(0, 500)}`,
-  );
-  console.log(
-    `[PARSE] Cleaned JSON (first 500 chars): ${clean.substring(0, 500)}`,
   );
   console.log(`[PARSE] Truncated: ${wasTruncated}`);
 
@@ -214,26 +234,23 @@ function extractResult(response: any): ParsedSchedule {
   } catch (err: any) {
     console.log(`[PARSE] JSON parse failed | error=${err.message}`);
 
-    // Fallback: if truncated, try to extract the "blocks" array before dayOverrides
+    // Fallback: if truncated, try to extract the "blocks" array
     if (wasTruncated) {
       console.log(`[PARSE] Attempting truncation recovery...`);
       try {
-        // Find the blocks array — it appears before dayOverrides
         const blocksMatch = clean.match(
           /"blocks"\s*:\s*(\[[\s\S]*?\])\s*,\s*"dayOverrides"/,
         );
         if (blocksMatch) {
           const blocks = JSON.parse(blocksMatch[1]);
           console.log(
-            `[PARSE] Recovery succeeded | blocks=${blocks.length} (dayOverrides lost to truncation)`,
+            `[PARSE] Recovery succeeded | blocks=${blocks.length} (dayOverrides lost)`,
           );
 
-          // Try to salvage any complete dayOverrides too
           let dayOverrides: Record<number, StudyBlock[]> | undefined;
           try {
             const overridesStart = clean.indexOf('"dayOverrides"');
             if (overridesStart !== -1) {
-              // Try to find complete day entries (e.g., "1": [...])
               const overridesText = clean.substring(overridesStart);
               const dayMatches = overridesText.matchAll(
                 /"(\d+)"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"|\})/g,
@@ -259,7 +276,7 @@ function extractResult(response: any): ParsedSchedule {
             scope: {
               type: dayOverrides ? "weekly" : "daily",
               description: dayOverrides
-                ? `Weekly schedule (${Object.keys(dayOverrides).length} days recovered — some data was lost, you can resend for a complete parse)`
+                ? `Weekly schedule (${Object.keys(dayOverrides).length} days recovered — some data was lost, resend for a complete parse)`
                 : "Daily schedule (weekly details were cut off — resend for full parse)",
               reviewAt: getDefaultReviewDate(),
             },
@@ -337,6 +354,8 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
   }
 
   const plan: StudyPlan = user.studyPlan;
+
+  // Use sleepSchedule if available, otherwise defaults
   const wakeHour = user.sleepSchedule?.wakeHour ?? 6;
   const wakeMinute = user.sleepSchedule?.wakeMinute ?? 0;
   const sleepHour = user.sleepSchedule?.sleepHour ?? 23;
@@ -346,19 +365,15 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
   const ist = nowInIST();
   const currentHour = ist.hour;
 
-  // Start with today's wake time in IST
   let nextWake = istDate(ist.date, wakeHour, wakeMinute);
 
-  // Determine if next wake is today or tomorrow
   const isInLateNight = sleepsAfterMidnight && currentHour < sleepHour;
   if (currentHour >= wakeHour && !isInLateNight) {
-    // Past wake time and not in late-night window → next wake is tomorrow
     const tomorrow = new Date(ist.date);
     tomorrow.setDate(tomorrow.getDate() + 1);
     nextWake = istDate(tomorrow, wakeHour, wakeMinute);
   }
 
-  // Cycle end = sleep time (may be next calendar day for late sleepers)
   let cycleEndBase = nextWake;
   if (sleepsAfterMidnight) {
     cycleEndBase = new Date(nextWake.getTime() + 24 * 60 * 60 * 1000);
@@ -374,7 +389,7 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
     `sleep=${cycleEnd.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} | dayOfWeek=${dayOfWeek}`,
   );
 
-  // ── Check for existing blocks in the next cycle ──────────────────────
+  // ── Check for existing blocks ────────────────────────────────────────
   const existing = await db.collection("actionStations").countDocuments({
     userId: uid,
     scheduledStart: { $gte: nextWake, $lte: cycleEnd },
@@ -386,8 +401,8 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
     return { created: 0, blocks: [] };
   }
 
-  // Pick blocks: day override or default
-  const dayBlocks: StudyBlock[] = plan.dayOverrides?.[dayOfWeek] || plan.blocks;
+  const dayBlocks: StudyBlock[] =
+    plan.dayOverrides?.[dayOfWeek] || plan.blocks;
 
   const createdBlocks: Array<{
     title: string;
@@ -399,10 +414,8 @@ export async function generateDailyBlocks(userId: ObjectId | string): Promise<{
   for (let i = 0; i < dayBlocks.length; i++) {
     const block = dayBlocks[i] as StudyBlock;
 
-    // Build start time in IST, anchored to the wake day
     let start = istDate(nextWake, block.startHour, block.startMinute);
 
-    // If block's start hour is before wake hour, it's a late-night block (after midnight)
     if (block.startHour < wakeHour) {
       const nextDay = new Date(nextWake.getTime() + 24 * 60 * 60 * 1000);
       start = istDate(nextDay, block.startHour, block.startMinute);

@@ -346,6 +346,8 @@ export async function buildCheckInContext(
 
   // Build context
   let context = `DAILY CHECK-IN CONTEXT:\n`;
+  context += `\nUser's name: ${user.name || user.profile?.name || "there"}`;
+  context += `\nStrictness level: ${user.strictnessLevel || 1}`;
   context += `\nToday: ${completed.length}/${todayTasks.length} blocks completed (${Math.round(completedMinutes / 60 * 10) / 10}h / ${Math.round(totalMinutes / 60 * 10) / 10}h)`;
   context += `\nYesterday: ${yesterdayCompleted}/${yesterdayTotal} blocks completed`;
 

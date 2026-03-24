@@ -1,4 +1,7 @@
 // src/services/conversation-state.service.ts
+// Simplified: just stores conversation history in Redis.
+// No more onboarding step machine — the classifier handles routing.
+
 import Redis from "ioredis";
 
 const redis = new Redis({
@@ -8,7 +11,7 @@ const redis = new Redis({
   enableReadyCheck: false,
 });
 
-const STATE_TTL_SECONDS = 2 * 60 * 60;
+const MAX_HISTORY = 20;                  // store last 20 messages (10 exchanges)
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -16,28 +19,10 @@ export interface ChatMessage {
 }
 
 export interface ConversationState {
-  step: // Onboarding - basics
-    | "onboarding_name"
-    | "onboarding_wake"
-    | "onboarding_sleep"
-    // Onboarding - UPSC profile
-    | "onboarding_target_year"
-    | "onboarding_attempt"
-    | "onboarding_optional_subject"
-    | "onboarding_prep_mode"
-    | "onboarding_weak_subjects"
-    | "onboarding_strictness"
-    // Onboarding - timetable capture
-    | "onboarding_timetable_input"
-    // Active states
-    | "chatting"
-    | "idle";
   history: ChatMessage[];
-  data?: any;
+  data?: Record<string, any>;  // temporary storage (e.g., pending schedule confirmation)
   updatedAt: number;
 }
-
-const MAX_HISTORY = 10;
 
 export async function getState(
   chatId: string,
@@ -56,10 +41,7 @@ export async function appendToHistory(
   userMessage: string,
   assistantResponse: string,
 ) {
-  const state = (await getState(chatId)) ?? {
-    step: "chatting" as const,
-    history: [],
-  };
+  const state = (await getState(chatId)) ?? { history: [] };
 
   const history: ChatMessage[] = [
     ...state.history,
@@ -67,24 +49,23 @@ export async function appendToHistory(
     { role: "assistant", content: assistantResponse },
   ];
 
-  const trimmed = history.slice(-MAX_HISTORY);
-
-  await setState(chatId, {
-    ...state,
-    step: "chatting",
-    history: trimmed,
-  });
+  await setState(chatId, { history });
 }
 
 export async function clearHistory(chatId: string) {
-  const state = await getState(chatId);
-  if (!state) return;
+  await setState(chatId, { history: [] });
+}
 
-  await setState(chatId, {
-    ...state,
-    step: "idle",
-    history: [],
-  });
+export async function getHistory(chatId: string): Promise<ChatMessage[]> {
+  const state = await getState(chatId);
+  const fullHistory = state?.history || [];
+  // Only send the last MAX_HISTORY messages to avoid context pile-up
+  return fullHistory.slice(-MAX_HISTORY);
+}
+
+export async function getFullHistory(chatId: string): Promise<ChatMessage[]> {
+  const state = await getState(chatId);
+  return state?.history || [];
 }
 
 export async function setState(
@@ -92,7 +73,7 @@ export async function setState(
   state: Omit<ConversationState, "updatedAt">,
 ) {
   const full: ConversationState = { ...state, updatedAt: Date.now() };
-  await redis.setex(`conv:${chatId}`, STATE_TTL_SECONDS, JSON.stringify(full));
+  await redis.set(`conv:${chatId}`, JSON.stringify(full));
 }
 
 export async function clearState(chatId: string) {

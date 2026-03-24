@@ -27,6 +27,7 @@
     "ioredis": "^5.9.2",
     "mongodb": "^7.1.0",
     "node-telegram-bot-api": "^0.67.0",
+    "openai": "^6.32.0",
     "posthog-node": "^5.28.0",
     "xstate": "^5.28.0"
   }

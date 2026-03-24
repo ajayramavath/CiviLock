@@ -1,32 +1,104 @@
+// src/services/telegram-handlers/command.handler.ts
 import TelegramBot from "node-telegram-bot-api";
 import { getDb } from "../../db.js";
-import {
-  getUserCurrentDayCycle,
-  getUserNextDayCycle,
-  formatTime,
-  formatDateTime,
-} from "../conversation.service";
-import { getState, setState } from "../conversation-state.service.js";
 import {
   getAvoidanceAlerts,
   getWeeklySubjectStats,
 } from "../analytics.service.js";
 import { trackEvent } from "../posthog.service.js";
+import { createDefaultProfile, getUserCurrentDayCycle } from "../profile.service.js";
+import { ObjectId } from "mongodb";
+import { formatTime } from "../../utils/timezone.js";
+import { WELCOME_MESSAGE } from "./message.handler.js";
 
 // ─── Prelims helper ──────────────────────────────────────────────────────────
 
-function daysUntilPrelims(targetYear: number): number {
-  const may = new Date(targetYear, 4, 31);
-  const dayOfWeek = may.getDay();
-  const lastSunday = new Date(may);
-  lastSunday.setDate(may.getDate() - dayOfWeek);
-  const diff = lastSunday.getTime() - Date.now();
-  return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+function getPrelimsDate(year: number): Date {
+  const exceptions: Record<number, string> = {
+    2025: "2025-05-25",
+    2026: "2026-05-24",
+  };
+  if (exceptions[year]) {
+    return new Date(exceptions[year]);
+  }
+  const may31 = new Date(year, 4, 31);
+  const lastSunday = new Date(may31);
+  lastSunday.setDate(may31.getDate() - may31.getDay());
+  return lastSunday;
+}
+
+export function daysUntilPrelims(year: number): number {
+  const prelims = getPrelimsDate(year);
+  return Math.max(
+    0,
+    Math.ceil((prelims.getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
+  );
 }
 
 // ─── Register all commands ───────────────────────────────────────────────────
 
 export function registerCommandHandlers(bot: TelegramBot) {
+  bot.onText(/\/start/, async (msg) => {
+    const chatId = msg.chat.id;
+    const db = getDb();
+
+    let user = await db
+      .collection("users")
+      .findOne({ telegramChatId: chatId.toString() });
+
+    if (!user) {
+      // ── New user ────────────────────────────────────────────────────
+      const userId = new ObjectId();
+      const firstName = msg.from?.first_name || "User";
+
+      await db.collection("users").insertOne({
+        _id: userId,
+        name: firstName,
+        telegramChatId: chatId.toString(),
+        strictnessLevel: 1,
+        timezone: "Asia/Kolkata",
+        wakeTime: null,
+        sleepSchedule: null,
+        dailyCheckInTime: null,
+        weeklyReviewTime: null,
+        upscProfile: null,
+        studyPlan: null,
+        profile: createDefaultProfile(firstName),
+        onboardingComplete: false,
+        createdAt: new Date(),
+      });
+
+      trackEvent(chatId.toString(), "user_created_via_start");
+      await bot.sendMessage(chatId, WELCOME_MESSAGE, { parse_mode: "Markdown" });
+
+    } else {
+      // ── Existing user ───────────────────────────────────────────────
+      // Ensure profile subdoc exists (migration for old users)
+      if (!user.profile) {
+        await db.collection("users").updateOne(
+          { _id: user._id },
+          { $set: { profile: createDefaultProfile(user.name) } },
+        );
+      }
+
+      const days = user.upscProfile
+        ? daysUntilPrelims(user.upscProfile.targetYear)
+        : null;
+      const countdown = days ? `\n⏰ <b>${days} days until Prelims</b>` : "";
+      const name = user.profile?.name || user.name || "there";
+
+      await bot.sendMessage(
+        chatId,
+        `👋 <b>${name}</b>!${countdown}\n\n` +
+        `/today — Today's blocks\n` +
+        `/week — Weekly summary\n` +
+        `/strictness — Change accountability level\n` +
+        `/help — All commands\n\n` +
+        `Or just tell me what you need to study.`,
+        { parse_mode: "HTML" },
+      );
+    }
+  });
   // ── /help ──────────────────────────────────────────────────────────────
 
   bot.onText(/\/help/, async (msg) => {
@@ -45,13 +117,10 @@ export function registerCommandHandlers(bot: TelegramBot) {
       chatId,
       `📖 <b>Commands</b>${countdown}\n\n` +
       `<b>Study Management:</b>\n` +
-      `/plan - Schedule tomorrow's study blocks\n` +
       `/today - View today's schedule\n` +
       `/week - Weekly subject-wise summary\n` +
-      `/complete [number] - Mark study block done\n\n` +
       `<b>Settings:</b>\n` +
       `/strictness - Change accountability level\n` +
-      `/pause [minutes] - Pause reminders\n\n` +
       `<b>Quick Add:</b>\n` +
       `<i>"study polity 9am to 12pm"</i>\n` +
       `<i>"revise geography 2 hours"</i>\n` +
@@ -60,86 +129,7 @@ export function registerCommandHandlers(bot: TelegramBot) {
     );
   });
 
-  // ── /plan — UPSC bulk study scheduling ─────────────────────────────────
-
-  // bot.onText(/\/plan/, async (msg) => {
-  //   const chatId = msg.chat.id;
-  //   trackEvent(chatId.toString(), "command_used", { command: "/plan" });
-  //   const db = getDb();
-  //   const user = await db
-  //     .collection("users")
-  //     .findOne({ telegramChatId: chatId.toString() });
-  //   const state = await getState(chatId.toString());
-
-  //   if (!user || !user.onboardingComplete) {
-  //     await bot.sendMessage(
-  //       chatId,
-  //       "⚠️ Please complete setup first. Use /start",
-  //     );
-  //     return;
-  //   }
-
-  //   const dayCycle = getUserNextDayCycle(user);
-  //   const days = user.upscProfile
-  //     ? daysUntilPrelims(user.upscProfile.targetYear)
-  //     : null;
-  //   const countdown = days ? `\n⏰ <b>${days} days until Prelims</b>\n` : "";
-
-  //   // Check if there are already tasks for tomorrow
-  //   const existingTasks = await db
-  //     .collection("actionStations")
-  //     .find({
-  //       userId: user._id,
-  //       scheduledStart: {
-  //         $gte: dayCycle.startDateTime,
-  //         $lte: dayCycle.endDateTime,
-  //       },
-  //     })
-  //     .sort({ scheduledStart: 1 })
-  //     .toArray();
-
-  //   let existingInfo = "";
-  //   if (existingTasks.length > 0) {
-  //     existingInfo =
-  //       `\n📋 <b>Already scheduled:</b>\n` +
-  //       existingTasks
-  //         .map(
-  //           (t) =>
-  //             `  ${formatTime(t.scheduledStart)} - ${t.title}${t.subject ? ` [${t.subject}]` : ""}`,
-  //         )
-  //         .join("\n") +
-  //       "\n\nNew blocks will be added alongside these.\n";
-  //   }
-
-  //   // Get avoidance data to suggest what to study
-  //   const avoidance = await getAvoidanceAlerts(user._id);
-  //   let suggestion = "";
-  //   if (avoidance.length > 0) {
-  //     const avoided = avoidance.map((a) => a.subject).join(", ");
-  //     suggestion = `\n⚠️ <b>You've been avoiding:</b> ${avoided}\nConsider including these tomorrow.\n`;
-  //   }
-
-  //   await setState(chatId.toString(), {
-  //     step: "idle",
-  //     data: { planningMode: true, dayCycle },
-  //     history: state?.history || [],
-  //   });
-
-  //   await bot.sendMessage(
-  //     chatId,
-  //     `📋 <b>Plan Tomorrow's Study</b>\n${countdown}` +
-  //     `\n🌅 ${formatDateTime(dayCycle.startDateTime)} → 😴 ${formatDateTime(dayCycle.endDateTime)}\n` +
-  //     existingInfo +
-  //     suggestion +
-  //     `\nDump your full plan:\n` +
-  //     `<i>"9-12 polity, 2-5 optional, 7-8 CA, 9-10 answer writing"</i>\n\n` +
-  //     `Or one at a time:\n` +
-  //     `<i>"study polity 9am to 12pm"</i>`,
-  //     { parse_mode: "HTML" },
-  //   );
-  // });
-
-  // ── /today — show today's study blocks with subject tags ───────────────
+  // ── /today ─────────────────────────────────────────────────────────────
 
   bot.onText(/\/today/, async (msg) => {
     const chatId = msg.chat.id;
@@ -149,8 +139,8 @@ export function registerCommandHandlers(bot: TelegramBot) {
       .collection("users")
       .findOne({ telegramChatId: chatId.toString() });
 
-    if (!user || !user.onboardingComplete) {
-      await bot.sendMessage(chatId, "Please complete setup first. Use /start");
+    if (!user) {
+      await bot.sendMessage(chatId, "Hey! Use /start to get set up first.");
       return;
     }
 
@@ -174,16 +164,12 @@ export function registerCommandHandlers(bot: TelegramBot) {
     if (tasks.length === 0) {
       await bot.sendMessage(
         chatId,
-        `📭 No study blocks scheduled for today.${days ? `\n\n⏰ ${days} days until Prelims.` : ""}\n\nUse /plan to schedule, or just tell me what to study!`,
+        `📭 No study blocks scheduled for today.${days ? `\n\n⏰ ${days} days until Prelims.` : ""}\n\nTell me what you're studying, or send your timetable!`,
       );
       return;
     }
 
     const completed = tasks.filter((t) => t.status === "completed").length;
-    const partial = tasks.filter((t) => t.status === "partial").length;
-    const skipped = tasks.filter((t) => t.status === "skipped").length;
-
-    // Calculate hours
     const totalMinutes = tasks.reduce(
       (sum, t) => sum + (t.estimatedMinutes || 60),
       0,
@@ -213,7 +199,6 @@ export function registerCommandHandlers(bot: TelegramBot) {
     });
 
     if (completed < tasks.length) {
-      message += `Reply /complete [number] to mark done`;
     } else {
       message += `🎉 All blocks completed today!`;
     }
@@ -221,7 +206,7 @@ export function registerCommandHandlers(bot: TelegramBot) {
     await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
   });
 
-  // ── /week — weekly subject-wise summary + avoidance alerts ─────────────
+  // ── /week ──────────────────────────────────────────────────────────────
 
   bot.onText(/\/week/, async (msg) => {
     const chatId = msg.chat.id;
@@ -231,8 +216,8 @@ export function registerCommandHandlers(bot: TelegramBot) {
       .collection("users")
       .findOne({ telegramChatId: chatId.toString() });
 
-    if (!user || !user.onboardingComplete) {
-      await bot.sendMessage(chatId, "Please complete setup first. Use /start");
+    if (!user) {
+      await bot.sendMessage(chatId, "Hey! Use /start to get set up first.");
       return;
     }
 
@@ -246,7 +231,7 @@ export function registerCommandHandlers(bot: TelegramBot) {
     if (stats.totalBlocks === 0) {
       await bot.sendMessage(
         chatId,
-        `📊 <b>Weekly Summary</b>${days ? ` — ⏰ ${days} days until Prelims` : ""}\n\nNo study blocks this week yet. Use /plan to get started!`,
+        `📊 <b>Weekly Summary</b>${days ? ` — ⏰ ${days} days until Prelims` : ""}\n\nNo study blocks this week yet. Tell me what you're studying, or send your timetable!`,
         { parse_mode: "HTML" },
       );
       return;
@@ -254,7 +239,6 @@ export function registerCommandHandlers(bot: TelegramBot) {
 
     let message = `📊 <b>Weekly Summary</b> (Last 7 Days)${days ? `\n⏰ <b>${days} days until Prelims</b>` : ""}\n\n`;
 
-    // Overall stats
     message +=
       `<b>Overview:</b>\n` +
       `📋 Blocks: ${stats.completedBlocks}/${stats.totalBlocks} completed (${stats.completionRate}%)\n` +
@@ -262,7 +246,6 @@ export function registerCommandHandlers(bot: TelegramBot) {
       `${stats.skippedHours > 0 ? ` / ${stats.skippedHours}h skipped` : ""}\n` +
       `🔥 Streak: ${stats.currentStreak} day${stats.currentStreak !== 1 ? "s" : ""}\n\n`;
 
-    // Subject breakdown with hours
     if (stats.subjects.length > 0) {
       message += `<b>Subject-wise Hours:</b>\n`;
 
@@ -275,11 +258,11 @@ export function registerCommandHandlers(bot: TelegramBot) {
               : s.completionRate >= 50
                 ? "🟡"
                 : "🔴";
-          const compH = Math.round(s.completedMinutes / 60 * 10) / 10;
-          const schedH = Math.round(s.totalMinutes / 60 * 10) / 10;
+          const compH = Math.round((s.completedMinutes / 60) * 10) / 10;
+          const schedH = Math.round((s.totalMinutes / 60) * 10) / 10;
           let line = `${bar} <b>${s.subject}</b>: ${compH}h / ${schedH}h (${s.completionRate}%)`;
           if (s.skippedMinutes > 0) {
-            const skipH = Math.round(s.skippedMinutes / 60 * 10) / 10;
+            const skipH = Math.round((s.skippedMinutes / 60) * 10) / 10;
             line += ` — ${skipH}h skipped`;
           }
           message += `${line}\n`;
@@ -288,7 +271,6 @@ export function registerCommandHandlers(bot: TelegramBot) {
       message += "\n";
     }
 
-    // Avoidance alerts
     if (avoidance.length > 0) {
       message += `<b>⚠️ Avoidance Alerts:</b>\n`;
       avoidance.forEach((a) => {
@@ -297,13 +279,12 @@ export function registerCommandHandlers(bot: TelegramBot) {
       message += "\n";
     }
 
-    // Weak subject check
     if (user.upscProfile?.weakSubjects?.length > 0) {
       const weakNotStudied = user.upscProfile.weakSubjects.filter(
         (ws: string) => {
           const short = ws.split(" (")[0];
           const stat = stats.subjects.find((s) => s.subject === short);
-          return !stat || stat.completedMinutes < 60; // less than 1 hour on a weak subject
+          return !stat || stat.completedMinutes < 60;
         },
       );
 
@@ -315,7 +296,6 @@ export function registerCommandHandlers(bot: TelegramBot) {
       }
     }
 
-    // Comparison placeholder
     if (stats.previousWeekRate !== null) {
       const diff = stats.completionRate - stats.previousWeekRate;
       const arrow = diff > 0 ? "📈" : diff < 0 ? "📉" : "➡️";
@@ -324,92 +304,7 @@ export function registerCommandHandlers(bot: TelegramBot) {
 
     await bot.sendMessage(chatId, message, { parse_mode: "HTML" });
   });
-
-  // ── /complete [number] ─────────────────────────────────────────────────
-
-  bot.onText(/\/complete (.+)/, async (msg, match) => {
-    const chatId = msg.chat.id;
-    if (!match || !match[1]) {
-      await bot.sendMessage(chatId, "Usage: /complete [task number]");
-      return;
-    }
-
-    const taskNumber = parseInt(match[1]);
-    const db = getDb();
-    const user = await db
-      .collection("users")
-      .findOne({ telegramChatId: chatId.toString() });
-
-    if (!user || !user.onboardingComplete) {
-      await bot.sendMessage(chatId, "Please complete setup first.");
-      return;
-    }
-
-    const dayCycle = getUserCurrentDayCycle(user);
-    const tasks = await db
-      .collection("actionStations")
-      .find({
-        userId: user._id,
-        scheduledStart: {
-          $gte: dayCycle.startDateTime,
-          $lte: dayCycle.endDateTime,
-        },
-      })
-      .sort({ scheduledStart: 1 })
-      .toArray();
-
-    if (taskNumber < 1 || taskNumber > tasks.length) {
-      await bot.sendMessage(
-        chatId,
-        "❌ Invalid number. Use /today to see your blocks.",
-      );
-      return;
-    }
-
-    const task = tasks[taskNumber - 1];
-    if (!task) {
-      await bot.sendMessage(
-        chatId,
-        "❌ Invalid number. Use /today to see your blocks.",
-      );
-      return;
-    }
-
-    // Try to send machine event first, fall back to direct DB update
-    try {
-      const { sendMachineEvent } = await import("../task-machine.service.js");
-      const result = await sendMachineEvent(task._id.toString(), {
-        type: "USER_COMPLETED",
-      });
-      if (!result) {
-        // Machine not found — direct DB update (legacy task)
-        await db
-          .collection("actionStations")
-          .updateOne(
-            { _id: task._id },
-            { $set: { status: "completed", completedAt: new Date() } },
-          );
-      }
-    } catch {
-      await db
-        .collection("actionStations")
-        .updateOne(
-          { _id: task._id },
-          { $set: { status: "completed", completedAt: new Date() } },
-        );
-    }
-
-    const remaining = tasks.filter((t) => t.status !== "completed").length - 1;
-    const subject = task.subject ? ` [${task.subject}]` : "";
-
-    await bot.sendMessage(
-      chatId,
-      `✅ <b>${task.title}</b>${subject} completed!\n\n${remaining > 0 ? `${remaining} blocks left today. Keep pushing! 💪` : `🎉 All done for today!`}`,
-      { parse_mode: "HTML" },
-    );
-  });
-
-  // ── /strictness — 2 levels ─────────────────────────────────────────────
+  // ── /strictness ────────────────────────────────────────────────────────
 
   bot.onText(/\/strictness/, async (msg) => {
     const chatId = msg.chat.id;
@@ -420,7 +315,7 @@ export function registerCommandHandlers(bot: TelegramBot) {
       .findOne({ telegramChatId: chatId.toString() });
 
     if (!user) {
-      await bot.sendMessage(chatId, "Please use /start first.");
+      await bot.sendMessage(chatId, "Use /start to get set up first.");
       return;
     }
 
@@ -451,7 +346,7 @@ export function registerCommandHandlers(bot: TelegramBot) {
   });
 }
 
-// ── Strictness change callback (register in callback.handler.ts) ─────────
+// ── Strictness change callback ───────────────────────────────────────────
 
 export async function handleStrictnessChangeCallback(
   bot: TelegramBot,
@@ -464,12 +359,15 @@ export async function handleStrictnessChangeCallback(
   const level = parseInt(data.replace("change_strictness_", "")) as 1 | 2;
   const db = getDb();
 
-  await db
-    .collection("users")
-    .updateOne(
-      { telegramChatId: chatId.toString() },
-      { $set: { strictnessLevel: level } },
-    );
+  await db.collection("users").updateOne(
+    { telegramChatId: chatId.toString() },
+    {
+      $set: {
+        strictnessLevel: level,
+        "profile.strictnessLevel": level,
+      },
+    },
+  );
 
   const name = level === 2 ? "Strict Mentor 🔥" : "Study Partner 📖";
 

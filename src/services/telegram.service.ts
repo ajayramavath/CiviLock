@@ -1,9 +1,9 @@
 import TelegramBot from "node-telegram-bot-api";
 import { ObjectId } from "mongodb";
-import { registerOnboardingHandlers } from "./telegram-handlers/onboarding.handler";
 import { registerCommandHandlers } from "./telegram-handlers/command.handler";
-import { registerMessageHandler } from "./telegram-handlers/message.handler";
 import { registerCallbackHandler } from "./telegram-handlers/callback.handler";
+import { registerMessageHandler } from "./telegram-handlers/message.handler";
+import { registerAdminHandlers } from "./telegram-handlers/admin.handler";
 import { getDb } from "../db";
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, {
@@ -14,10 +14,10 @@ const adminBot = new TelegramBot(process.env.TELEGRAM_ADMIN_BOT_TOKEN!, {
   polling: true,
 });
 
-registerOnboardingHandlers(bot);
 registerCommandHandlers(bot);
 registerMessageHandler(bot);
 registerCallbackHandler(bot);
+registerAdminHandlers(adminBot);
 
 export function parseTime(
   text: string,

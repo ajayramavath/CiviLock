@@ -70,10 +70,15 @@
 - Days until exam shown in interactions and check-ins
 - Used as motivational pressure (Level 2) or context (Level 1)
 
-## Natural Language Task Management
-- Add tasks via natural language ("polity at 2pm for 2 hours")
-- AI suggests time slots based on existing schedule
-- Update or delete tasks conversationally
+## Agentic Conversation System & Task Management
+- Every incoming message is processed by a core agent workflow
+- **Two-tier architecture**:
+  - **Tier 1 (Classifier):** Fast, low-cost model parses user intent, extracts profile data in real-time, and determines required capabilities
+  - **Tier 2 (Executor):** High-capability model handles natural conversational coaching and executes dynamic tools based on Tier 1 directives
+- Dynamic tool provisioning to reduce token cost and improve execution accuracy
+- Continuous User Status Block injection (keeps agent aware of name, strictness, schedule context, and missing information)
+- Natural language task operations ("add polity at 2pm", "delete all tasks tomorrow") mapped securely to system tool calls
+- Context-preservation across complex multi-turn interactions and state transitions
 
 ## Analytics
 - Task resolution events written to analytics collection
@@ -126,8 +131,9 @@
 - BullMQ job queues for timed events and scheduled jobs
 - MongoDB Atlas for users, tasks, study plans, analytics
 - Redis container for state machines, job queues, and rate limiting
-- Anthropic Claude API for NLP and coaching tone
-- Centralized LLM service with automatic usage tracking
+- Anthropic Claude / OpenAI APIs for core reasoning and coaching tone
+- Agentic two-tier routing system (Classifier + Tool Executor)
+- Centralized LLM inference service with automatic detailed token/cost logging
 - Per-user job scheduling (not global crons)
 - IST-aware timezone utilities — all scheduling correct regardless of server TZ
 - PostHog SDK for product analytics

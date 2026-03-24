@@ -64,6 +64,7 @@ export async function checkRateLimit(
 const COST_PER_MODEL: Record<string, { inputPer1K: number; outputPer1K: number }> = {
   "claude-haiku-4-5-20251001": { inputPer1K: 0.001, outputPer1K: 0.005 },
   "claude-sonnet-4-5-20250929": { inputPer1K: 0.003, outputPer1K: 0.015 },
+  "gpt-4o-mini": { inputPer1K: 0.00015, outputPer1K: 0.0006 },
 };
 
 export async function trackAPIUsage(
