@@ -61,11 +61,19 @@ async function main() {
     }
 
     // ─── 2. Extract wakeTime from sleepSchedule if wakeTime is null ───
+    // ─── 2. Extract wakeTime from sleepSchedule if wakeTime is null ───
     if (!user.wakeTime && user.sleepSchedule?.wakeHour !== undefined) {
       const h = String(user.sleepSchedule.wakeHour).padStart(2, "0");
       const m = String(user.sleepSchedule.wakeMinute || 0).padStart(2, "0");
       updates["wakeTime"] = `${h}:${m}`;
-      updates["profile.wakeTime"] = `${h}:${m}`;
+
+      // Only set profile.wakeTime if we're NOT creating the whole profile object
+      if (user.profile) {
+        updates["profile.wakeTime"] = `${h}:${m}`;
+      } else {
+        // Profile is being created in step 1 — wakeTime is already included there
+        updates["profile"].wakeTime = `${h}:${m}`;
+      }
       console.log(`  + Set wakeTime from sleepSchedule: ${h}:${m}`);
     }
 
