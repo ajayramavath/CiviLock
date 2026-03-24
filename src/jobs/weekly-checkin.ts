@@ -25,7 +25,12 @@ export function startWeeklyCheckInWorker() {
         .collection("users")
         .findOne({ _id: new ObjectId(userId) });
 
-      if (!user || !user.onboardingComplete) return;
+      if (!user) return;
+
+      if (!user.onboardingComplete && !user.studyPlan) {
+        const taskCount = await db.collection("actionStations").countDocuments({ userId: user._id });
+        if (taskCount === 0) return;
+      }
 
       console.log(`📊 Running weekly check-in for ${user.name}`);
       const onboardedAt = user.createdAt ? new Date(user.createdAt) : undefined;

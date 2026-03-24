@@ -31,6 +31,11 @@ export async function startDailyCheckInWorker() {
         return;
       }
 
+      if (!user.onboardingComplete && !user.studyPlan) {
+        const taskCount = await db.collection("actionStations").countDocuments({ userId: user._id });
+        if (taskCount === 0) return;
+      }
+
       // Get today's tasks for the summary header
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
