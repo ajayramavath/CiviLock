@@ -462,6 +462,40 @@ ACCOUNTABILITY:
 - Acknowledge emotions, then push: "I get you're tired. But you said the same Tuesday."`
 }
 
+// ─── Response Sanitizer ───────────────────────────────────
+
+/**
+ * Strip leaked internal syntax (JSON wrappers, function calls, etc.)
+ * from responses before sending to users or saving to history.
+ */
+function sanitizeResponse(text: string): string {
+  let clean = text;
+
+  // Strip leaked JSON wrapper: {"reply":"actual message","actions":[...]}
+  // Try to extract just the reply field if the whole thing looks like our JSON format
+  const jsonReplyMatch = clean.match(/\{\s*"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (jsonReplyMatch && clean.trimStart().startsWith('{')) {
+    clean = jsonReplyMatch[1]!
+      .replace(/\\n/g, '\n')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\');
+  }
+
+  // Strip <function_calls>...</function_calls> blocks (and any partial ones)
+  clean = clean.replace(/<function_calls>[\s\S]*?<\/function_calls>/g, '').trim();
+  // Strip partial/unclosed <function_calls> blocks
+  clean = clean.replace(/<function_calls>[\s\S]*/g, '').trim();
+
+  // Strip any remaining JSON-looking tool call blocks like [{"tool":...}]
+  clean = clean.replace(/\[\s*\{\s*"tool"\s*:[\s\S]*?\}\s*\]/g, '').trim();
+
+  // Strip SCHEDULE_PENDING and PARSE_FAILED markers
+  clean = clean.replace(/SCHEDULE_PENDING:[a-f0-9]{24}\n?/g, '').trim();
+  clean = clean.replace(/PARSE_FAILED:\s*/g, '').trim();
+
+  return clean || "What's on your mind?";
+}
+
 // ─── Tier 1: Structured JSON Path ─────────────────────────
 
 async function runTier1(
@@ -494,9 +528,30 @@ async function runTier1(
   try {
     // Try to parse as JSON
     const raw = result.text || "";
-    const parsed = parseJSONResponse(raw) || JSON.parse(raw);
-    responseText = parsed.reply || parsed.response || raw;
-    const actions: any[] = parsed.actions || [];
+    let parsed: any = null;
+
+    try {
+      parsed = parseJSONResponse(raw);
+    } catch {}
+    if (!parsed) {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {}
+    }
+
+    if (parsed && typeof parsed === "object" && (parsed.reply || parsed.response)) {
+      // Successfully parsed with a reply field
+      responseText = parsed.reply || parsed.response;
+    } else if (parsed && typeof parsed === "object") {
+      // Parsed as JSON but no reply field — DON'T send raw JSON to user
+      console.warn(`[TIER1] Parsed JSON but no reply field. Keys: ${Object.keys(parsed).join(",")}`);
+      responseText = sanitizeResponse(raw);
+    } else {
+      // Not valid JSON — treat as plain text but sanitize
+      responseText = sanitizeResponse(raw);
+    }
+
+    const actions: any[] = parsed?.actions || [];
     console.log(`[TIER1] Parsed actions:`, JSON.stringify(actions));
 
     // Execute actions
@@ -578,8 +633,8 @@ async function runTier1(
       }
     }
   } catch {
-    // Not valid JSON — treat entire response as plain text
-    responseText = result.text || "What's on your mind?";
+    // Not valid JSON — treat entire response as plain text, but sanitize
+    responseText = sanitizeResponse(result.text || "");
   }
 
   // If any actions failed, we could append a note — but for Tier 1
@@ -594,7 +649,7 @@ async function runTier1(
   }
 
   return {
-    text: responseText,
+    text: sanitizeResponse(responseText),
     toolsUsed,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
@@ -639,7 +694,7 @@ async function runTier2(
   const responseText = textBlocks.map((b) => b.text).join("\n") || "Got it! What's next?";
 
   return {
-    text: responseText,
+    text: sanitizeResponse(responseText),
     toolsUsed,
     inputTokens: totalInputTokens,
     outputTokens: totalOutputTokens,
@@ -663,7 +718,7 @@ async function runChat(
   });
 
   return {
-    text: result.text || "What's on your mind?",
+    text: sanitizeResponse(result.text || ""),
     toolsUsed: [],
     inputTokens: result.inputTokens || 0,
     outputTokens: result.outputTokens || 0,
@@ -713,11 +768,12 @@ export async function runAgent(
   );
 
   // 5. Build messages — last 10 from history + current
+  //    Sanitize assistant msgs to prevent already-polluted history from causing future leaks
   const trimmedHistory = history.slice(-10);
   const messages = [
     ...trimmedHistory.map((msg) => ({
       role: msg.role as "user" | "assistant",
-      content: msg.content,
+      content: msg.role === "assistant" ? sanitizeResponse(msg.content) : msg.content,
     })),
     { role: "user" as const, content: userMessage },
   ];

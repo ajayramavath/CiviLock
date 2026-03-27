@@ -61,7 +61,6 @@ async function main() {
     }
 
     // ─── 2. Extract wakeTime from sleepSchedule if wakeTime is null ───
-    // ─── 2. Extract wakeTime from sleepSchedule if wakeTime is null ───
     if (!user.wakeTime && user.sleepSchedule?.wakeHour !== undefined) {
       const h = String(user.sleepSchedule.wakeHour).padStart(2, "0");
       const m = String(user.sleepSchedule.wakeMinute || 0).padStart(2, "0");

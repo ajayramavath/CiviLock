@@ -287,11 +287,8 @@ export function registerMessageHandler(bot: TelegramBot) {
       // 2. Run agent with only the tools the classifier requested
       const result = await runAgent(chatId, text, user, toolNames);
 
-      // 3. Clean response
-      let responseText = result.text
-        .replace(/SCHEDULE_PENDING:[a-f0-9]{24}\n?/g, "")
-        .replace(/PARSE_FAILED:\s*/g, "")
-        .trim();
+      // 3. Get response (already sanitized by agent.service)
+      let responseText = result.text.trim();
 
       if (!responseText) responseText = "What's next?";
 
