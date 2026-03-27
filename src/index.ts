@@ -222,7 +222,7 @@ async function scheduleExistingUsers() {
 
   const users = await db
     .collection("users")
-    .find({ onboardingComplete: true })
+    .find({ dailyCheckInTime: { $ne: null } })
     .toArray();
 
   console.log(`📅 Scheduling jobs for ${users.length} existing users...`);
