@@ -351,6 +351,17 @@ export interface SaveUserInfoInput {
 }
 
 export async function saveUserInfo(input: SaveUserInfoInput, user: User): Promise<string> {
+  // Validate time format for review_time and wake_time
+  if (input.field === "review_time" || input.field === "wake_time") {
+    const timeVal = input.value?.trim();
+    // If LLM sent multiple times (e.g. "09:00,14:00,20:00"), take the last one
+    const singleTime = timeVal.includes(",") ? timeVal.split(",").pop()!.trim() : timeVal;
+    if (!/^\d{1,2}:\d{2}$/.test(singleTime)) {
+      return `Invalid time format: "${input.value}". Please use HH:MM format (e.g. 21:00).`;
+    }
+    input.value = singleTime;
+  }
+
   const extracted = {
     name: input.field === "name" ? input.value : null,
     review_time: input.field === "review_time" ? input.value : null,

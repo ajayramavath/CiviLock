@@ -28,27 +28,36 @@ export async function saveExtractedFields(
   }
 
   if (extracted.review_time) {
-    updates["dailyCheckInTime"] = extracted.review_time;
-    updates["profile.dailyReviewTime"] = extracted.review_time;
-    saved.push(`review_time: ${extracted.review_time}`);
+    // Normalize: if comma-separated (e.g. "09:00,14:00,20:00"), take last one
+    let reviewTime = extracted.review_time.trim();
+    if (reviewTime.includes(",")) {
+      reviewTime = reviewTime.split(",").pop()!.trim();
+    }
+    if (!/^\d{1,2}:\d{2}$/.test(reviewTime)) {
+      console.warn(`[Profile] Invalid review_time "${extracted.review_time}", skipping`);
+    } else {
+      updates["dailyCheckInTime"] = reviewTime;
+      updates["profile.dailyReviewTime"] = reviewTime;
+      saved.push(`review_time: ${reviewTime}`);
 
-    // Schedule daily + weekly check-ins now that we have a time
-    const userId =
-      typeof user._id === "string" ? new ObjectId(user._id) : user._id;
-    try {
-      const { scheduleDailyCheckin, scheduleWeeklyCheckin } = await import(
-        "./checkin-scheduler.service.js"
-      );
-      await scheduleDailyCheckin(userId, extracted.review_time);
-      await scheduleWeeklyCheckin(userId, extracted.review_time);
-      console.log(
-        `[Profile] Check-ins scheduled for ${user.telegramChatId} at ${extracted.review_time}`,
-      );
-    } catch (err) {
-      console.error(
-        `[Profile] Failed to schedule check-ins for ${user.telegramChatId}:`,
-        err,
-      );
+      // Schedule daily + weekly check-ins now that we have a valid time
+      const userId =
+        typeof user._id === "string" ? new ObjectId(user._id) : user._id;
+      try {
+        const { scheduleDailyCheckin, scheduleWeeklyCheckin } = await import(
+          "./checkin-scheduler.service.js"
+        );
+        await scheduleDailyCheckin(userId, reviewTime);
+        await scheduleWeeklyCheckin(userId, reviewTime);
+        console.log(
+          `[Profile] Check-ins scheduled for ${user.telegramChatId} at ${reviewTime}`,
+        );
+      } catch (err) {
+        console.error(
+          `[Profile] Failed to schedule check-ins for ${user.telegramChatId}:`,
+          err,
+        );
+      }
     }
   }
 
