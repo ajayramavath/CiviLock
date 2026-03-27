@@ -227,14 +227,23 @@ async function scheduleExistingUsers() {
 
   console.log(`📅 Scheduling jobs for ${users.length} existing users...`);
 
+  let scheduled = 0;
+  let skipped = 0;
   for (const user of users) {
     if (user.dailyCheckInTime) {
-      await scheduleDailyCheckin(user._id, user.dailyCheckInTime);
-      await scheduleWeeklyCheckin(user._id, user.dailyCheckInTime);
+      try {
+        await scheduleDailyCheckin(user._id, user.dailyCheckInTime);
+        await scheduleWeeklyCheckin(user._id, user.dailyCheckInTime);
+        scheduled++;
+      } catch (err: any) {
+        console.error(`⚠️ Failed to schedule user ${user._id} (checkInTime="${user.dailyCheckInTime}"):`, err.message);
+        skipped++;
+      }
     }
     // Nightly blocks are now handled by the global hourly scheduler,
     // no per-user scheduling needed
   }
+  console.log(`📅 Scheduling done: ${scheduled} scheduled, ${skipped} skipped`);
 }
 
 async function start() {

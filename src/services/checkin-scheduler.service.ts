@@ -1,11 +1,31 @@
 import { ObjectId } from "mongodb";
 import { dailyCheckInQueue, weeklyCheckInQueue } from "../queue.js";
 
+/**
+ * Validate and parse "HH:MM" time string. Returns [hour, minute] or null if invalid.
+ */
+function parseCheckInTime(checkInTime: string, userId: ObjectId): [number, number] | null {
+  if (!checkInTime || typeof checkInTime !== "string" || !checkInTime.includes(":")) {
+    console.warn(`⚠️ Invalid checkInTime "${checkInTime}" for user ${userId}, skipping`);
+    return null;
+  }
+  const parts = checkInTime.split(":").map(Number);
+  const hour = parts[0];
+  const minute = parts[1];
+  if (hour === undefined || minute === undefined || isNaN(hour) || isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    console.warn(`⚠️ Invalid parsed time h=${hour} m=${minute} from "${checkInTime}" for user ${userId}, skipping`);
+    return null;
+  }
+  return [hour, minute];
+}
+
 export async function scheduleDailyCheckin(
   userId: ObjectId,
   checkInTime: string,
 ) {
-  const [hour, minute] = checkInTime.split(":").map(Number);
+  const parsed = parseCheckInTime(checkInTime, userId);
+  if (!parsed) return;
+  const [hour, minute] = parsed;
   const schedulerId = `daily-checkin-${userId}`;
 
   await dailyCheckInQueue.upsertJobScheduler(
@@ -38,7 +58,9 @@ export async function scheduleWeeklyCheckin(
   userId: ObjectId,
   checkInTime: string,
 ) {
-  const [hour, minute] = checkInTime.split(":").map(Number);
+  const parsed = parseCheckInTime(checkInTime, userId);
+  if (!parsed) return;
+  const [hour, minute] = parsed;
   const schedulerId = `weekly-checkin-${userId}`;
 
   // Sunday only: cron day-of-week 0 = Sunday
@@ -93,4 +115,3 @@ export async function removeWeeklyCheckin(userId: ObjectId) {
 export async function getAllCheckinSchedulers() {
   return await dailyCheckInQueue.getJobSchedulers();
 }
-
